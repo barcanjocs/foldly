@@ -454,7 +454,7 @@ impl App {
     /// Opens the playlist picker for the selected track.
     pub fn start_add_to_playlist(&mut self) {
         match (self.focus, self.selected_track().map(|t| t.id)) {
-            (Pane::Songs, Some(id)) => self.open_picker(vec![id], false),
+            (Pane::Songs, Some(id)) => self.open_picker(vec![id], false, true),
             _ => self.message = Some("select a song to add it to a playlist (A adds the whole list)".into()),
         }
     }
@@ -465,16 +465,26 @@ impl App {
         if ids.is_empty() {
             self.message = Some("no tracks here to add".into());
         } else {
-            self.open_picker(ids, true);
+            self.open_picker(ids, true, true);
         }
     }
 
-    fn open_picker(&mut self, track_ids: Vec<i64>, bulk: bool) {
+    /// Opens the playlist picker for the song that's playing, wherever you are.
+    pub fn start_add_playing_to_playlist(&mut self) {
+        match self.now_playing.as_ref().map(|t| t.id) {
+            // It may well not be in the playlist being shown, so that one is offered too.
+            Some(id) => self.open_picker(vec![id], false, false),
+            None => self.message = Some("nothing is playing".into()),
+        }
+    }
+
+    /// `skip_shown` leaves out the playlist being shown, for tracks picked from it: adding a
+    /// playlist's tracks to itself would only duplicate them.
+    fn open_picker(&mut self, track_ids: Vec<i64>, bulk: bool, skip_shown: bool) {
         match db::playlists(&self.conn) {
             Ok(mut playlists) => {
-                // Adding a playlist's tracks to itself would only duplicate them.
-                if let Location::Playlist { id, .. } = self.location {
-                    playlists.retain(|p| p.id != id);
+                if let (true, Location::Playlist { id, .. }) = (skip_shown, &self.location) {
+                    playlists.retain(|p| p.id != *id);
                 }
                 let mut state = ListState::default();
                 state.select(Some(if playlists.is_empty() { 0 } else { 1 }));
@@ -1208,6 +1218,21 @@ mod tests {
         app.select(0);
         app.activate_selected();
         assert_eq!(app.now_playing.as_ref().unwrap().title.as_deref(), Some("Tone 1"));
+
+        // P adds the playing song (not the selection), and offers the playlist being shown.
+        app.message = None;
+        app.select(2);
+        app.start_add_playing_to_playlist();
+        match &mut app.mode {
+            Mode::PickPlaylist { track_ids, playlists, state, .. } => {
+                assert_eq!(track_ids, &[app.now_playing.as_ref().unwrap().id]);
+                assert!(playlists.iter().any(|p| p.name == "Mix 2"), "the shown playlist is offered");
+                state.select(Some(0));
+            }
+            _ => panic!("picker should be open"),
+        }
+        app.mode = Mode::Normal;
+        app.select(0);
         app.player.seek_by(2);
         for _ in 0..30 {
             app.tick();

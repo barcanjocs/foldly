@@ -86,8 +86,7 @@ from its scope note alone, without re-deriving context.
       the next decoder to the same rodio `Player` instead of replacing the
       player; advance `queue_index` when `Player::len()` drops. Interacts with
       repeat-one and with `n`/`p` (which must clear the preloaded source).
-- [ ] **H. Add the playing track to a playlist** (tiny). A key (e.g. `P`)
-      that opens the picker for `now_playing` instead of the selection.
+- [x] **H. Add the playing track to a playlist** — done 2026-11-20: `P`.
 - [x] **I. Watch the music folder** — done 2026-11-20: `watch.rs`, rescans
       2 s after relevant changes settle; `u` kept as a manual rescan.
 - [ ] **J. Relink after renames and root changes** (medium). Renamed files

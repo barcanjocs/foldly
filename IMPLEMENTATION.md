@@ -286,8 +286,9 @@ closing sets `Mode::Normal` and the state is dropped. `InputPurpose::NewPlaylist
 the picker's "New playlist…" row chains into the name prompt.
 
 `PickPlaylist.bulk` is set by `A`: bulk adds skip tracks already in the
-playlist, single adds (`a`) don't. `open_picker` leaves out the playlist you're
-in. Row 0 of the picker is always "New playlist…"; the initial selection is
+playlist, single adds (`a`, `P`) don't. `open_picker` leaves out the playlist
+being shown for tracks picked from it (`a`, `A`), but not for `P`, whose
+playing song may well not be in it. Row 0 of the picker is always "New playlist…"; the initial selection is
 row 1 when playlists exist.
 
 ### Key dispatch and borrows

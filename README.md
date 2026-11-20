@@ -71,6 +71,7 @@ usual. Inside foldly, press `?` for every key.
 | `s` | Stop |
 | `a` | Add the selected track to a playlist |
 | `A` | Add every track shown to a playlist |
+| `P` | Add the song that's playing to a playlist |
 | `N` | New playlist |
 | `R` | Rename the playlist being shown |
 | `d` | Songs: remove the track from this playlist. Sidebar: delete the playlist |
@@ -129,6 +130,8 @@ up; hidden files and folders are skipped. Changes to other files, like cover art
   skipped, so re-running "add everything by this artist" only adds new songs.
 - In a playlist's songs, `d` removes the selected track and `J`/`K` move it. In the sidebar,
   `d` deletes the selected playlist after a `y`/`n` confirmation. Your files are never touched.
+- `P` opens the same picker for the song that's playing, whatever is selected, so you can file
+  a song you're enjoying without finding it in a list.
 - `N` creates an empty playlist and shows it; `R` renames the playlist being shown.
 
 A playlist can hold the same track more than once (with `a`).

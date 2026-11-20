@@ -245,6 +245,7 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
 
         KeyCode::Char('a') => app.start_add_to_playlist(),
         KeyCode::Char('A') => app.start_add_all_to_playlist(),
+        KeyCode::Char('P') => app.start_add_playing_to_playlist(),
         KeyCode::Char('N') => app.start_new_playlist(),
         KeyCode::Char('R') => app.start_rename(),
         KeyCode::Char('d') => app.delete_selected(),

@@ -59,6 +59,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
         &[
             ("a", "Add the selected track to a playlist"),
             ("A", "Add all tracks shown to a playlist (skips duplicates)"),
+            ("P", "Add the song that's playing to a playlist"),
             ("N", "New playlist"),
             ("R", "Rename the playlist being shown"),
             ("d", "Songs: remove from playlist. Sidebar: delete playlist"),
