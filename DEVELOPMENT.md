@@ -66,11 +66,13 @@ from its scope note alone, without re-deriving context.
       an artist shows all their songs grouped by album. `A` from the sidebar
       then adds an exact artist/album (unlike filter + `A`). Untagged tracks
       go in "Unknown".
-- [ ] **D. Interactive queue panel** (medium). `Tab` focuses the queue; while
-      focused, `j`/`k` move, `Enter` jumps to a track, `d` removes it,
-      `J`/`K` reorder, `c` clears upcoming. Needs a focus field on `App`,
-      a `ListState` for the queue, and edits applied to both `queue` and
-      `unshuffled` (see the shuffle invariant in IMPLEMENTATION.md).
+- [ ] **D. Interactive queue panel** (medium). Make the queue a third
+      `Pane` (`Tab` cycles sidebar → songs → queue; clicks focus it too);
+      while focused, `j`/`k` move, `Enter` jumps to a track, `d` removes it,
+      `J`/`K` reorder, `c` clears upcoming. Needs a `ListState` for the
+      queue (its window currently comes from `queue_window_start`), and
+      edits applied to both `queue` and `unshuffled` (see the shuffle
+      invariant in IMPLEMENTATION.md).
 - [ ] **E. M3U export / import** (small-medium). `E` on a playlist writes
       `<name>.m3u` with paths relative to the music root (into the root, or
       a chosen folder); import reads `.m3u` files found during the scan, or
@@ -101,19 +103,18 @@ from its scope note alone, without re-deriving context.
       log file while the TUI is up.
 - [ ] **L. Track durations in lists** (tiny). Right-align `mm:ss` in the
       songs and queue rows; durations are already in `Track::duration`.
-- [ ] **M. Cover art** (medium). Show embedded art (lofty) or `cover.jpg` in a
-      corner of the queue panel with `ratatui-image` (kitty/sixel/iTerm
-      protocols, halfblocks fallback).
+- [ ] **M. Cover art** (medium). Show the selected song's embedded art
+      (lofty) or a `cover.jpg` beside it in the info pane, with
+      `ratatui-image` (kitty/sixel/iTerm protocols, halfblocks fallback).
+      Decode off the UI thread and cache by track id; draw must stay cheap.
 - [ ] **N. Play counts, last played, favourites** (small-medium). New columns
       on `tracks`, bumped when a track plays past half way; feeds O.
 - [ ] **O. Smart playlists** (medium-large). Saved rules (artist is X,
       added in the last N days, never played) shown as virtual folders.
 - [ ] **P. Config file** (medium). Keybindings, colours, seek step, start
       view, in `dirs::config_dir()/foldly/config.toml`.
-- [ ] **Q. Mouse clicks** (small). Mouse capture is on for divider dragging;
-      clicking already focuses and selects; double-click could play, and
-      clicking the progress bar could seek. Hit-test with the rects
-      `ui::draw` already records (extend `App::panes` with the transport).
+- [x] **Q. Mouse clicks** — done 2026-11-20: double-click acts like Enter,
+      clicking the progress bar seeks.
 - [ ] **Nits** (tiny, do whenever):
   - A file that fails to decode sets the message line, but `play_index`
     clears it when the next track starts, so the skip is invisible. Keep the

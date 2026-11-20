@@ -63,6 +63,8 @@ pub struct PaneRects {
     pub sidebar: Rect,
     pub songs: Rect,
     pub right: Rect,
+    /// The progress bar, including its border.
+    pub transport: Rect,
 }
 
 /// What the info pane shows: the selected song, or a summary of the selected source when the
@@ -206,6 +208,8 @@ pub struct App {
     pub right_width: u16,
     pub panes: PaneRects,
     dragging: Option<Divider>,
+    /// The last row clicked and when, to spot a double-click.
+    last_click: Option<(Instant, Pane, usize)>,
     pub should_quit: bool,
 }
 
@@ -245,6 +249,7 @@ impl App {
             right_width: DEFAULT_RIGHT_WIDTH,
             panes: PaneRects::default(),
             dragging: None,
+            last_click: None,
             should_quit: false,
         };
         match Watch::start(&app.root) {
@@ -690,9 +695,11 @@ impl App {
         }
     }
 
-    /// A left click: grabs a divider if it landed on one (either border of the pair), otherwise
-    /// focuses the pane under the pointer and selects the clicked row.
-    pub fn mouse_down(&mut self, column: u16, row: u16) {
+    /// A left click at `now`: grabs a divider if it landed on one (either border of the pair),
+    /// seeks if it landed on the progress bar, otherwise focuses the pane under the pointer and
+    /// selects the clicked row. A second click on the same row within `DOUBLE_CLICK` acts like
+    /// Enter: plays a song, or moves from the sidebar into its songs.
+    pub fn mouse_down(&mut self, column: u16, row: u16, now: Instant) {
         let (songs, right) = (self.panes.songs, self.panes.right);
         let in_rows = row >= songs.y && row < songs.y + songs.height;
         let on = |x: u16| in_rows && column + 1 >= x && column <= x;
@@ -704,6 +711,9 @@ impl App {
             None
         };
         if self.dragging.is_some() {
+            return;
+        }
+        if self.seek_to_column(column, row) {
             return;
         }
         let Some(pane) = self.pane_at(column, row) else { return };
@@ -718,9 +728,35 @@ impl App {
             match pane {
                 Pane::Sidebar if index < self.sidebar.len() => self.select_source(index),
                 Pane::Songs if index < self.visible.len() => self.select(index),
-                _ => {}
+                _ => return,
+            }
+            let double = self
+                .last_click
+                .is_some_and(|(at, p, i)| p == pane && i == index && now.duration_since(at) <= DOUBLE_CLICK);
+            if double {
+                self.last_click = None;
+                self.activate_selected();
+            } else {
+                self.last_click = Some((now, pane, index));
             }
         }
+    }
+
+    /// Seeks the playing track to the point of the progress bar under `column`, if the click is
+    /// on the bar. Returns whether it was.
+    fn seek_to_column(&mut self, column: u16, row: u16) -> bool {
+        let bar = self.panes.transport;
+        let on_bar = row >= bar.y && row < bar.y + bar.height && column > bar.x && column + 1 < bar.x + bar.width;
+        if !on_bar {
+            return false;
+        }
+        if let Some(duration) = self.now_playing.as_ref().and_then(|t| t.duration) {
+            // The bar fills the border's inside, columns x+1 ..= x+width-2.
+            let inner = f64::from(bar.width.saturating_sub(2).max(1));
+            let fraction = (f64::from(column - bar.x - 1) / inner).clamp(0.0, 1.0);
+            self.player.seek_to(duration.mul_f64(fraction));
+        }
+        true
     }
 
     /// Moves the grabbed divider to follow the pointer. Saved when the button is released.
@@ -905,6 +941,8 @@ const DEFAULT_RIGHT_WIDTH: u16 = 30;
 const SIDEBAR_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 10..=40;
 const RIGHT_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 15..=50;
 const MIN_SONGS_WIDTH: u16 = 25;
+/// Two clicks on the same row at most this far apart are a double-click.
+const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
 /// Identifies a queue item; the entry id tells apart repeats of a track within a playlist.
 fn queue_key(t: &Track) -> (i64, Option<i64>) {
@@ -1272,23 +1310,42 @@ mod tests {
 
         // Clicking a sidebar row focuses the sidebar and shows that source; the wheel scrolls
         // the pane under the pointer; clicking a song selects it.
-        app.mouse_down(5, 1);
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        app.mouse_down(5, 1, at(0));
         assert_eq!((app.focus, app.location.clone()), (Pane::Sidebar, Location::AllTracks));
         app.scroll_at(5, 3, 3);
         assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Mix 2"), "clamped to the last");
-        app.mouse_down(40, 2);
+        app.mouse_down(40, 2, at(1000));
         assert_eq!((app.focus, app.list_state.selected()), (Pane::Songs, Some(1)));
+
+        // A slow second click on the same song only selects; a quick one plays it from the start.
+        let playing = app.now_playing.as_ref().map(|t| t.id);
+        assert!(app.player.position() > Duration::from_millis(800), "Tone 3 has been playing a while");
+        app.mouse_down(40, 2, at(2000));
+        assert!(app.player.position() > Duration::from_millis(800), "not a double-click");
+        app.mouse_down(40, 2, at(2200));
+        assert_eq!(app.now_playing.as_ref().map(|t| t.id), playing, "the same song (Tone 3), restarted");
+        assert!(app.player.position() < Duration::from_millis(500), "{:?}", app.player.position());
+
+        // Clicking the middle of the progress bar seeks to about half way. At 100×10 the bar's
+        // border is rows 6..9 and its inside columns 1..=98.
+        assert_eq!(app.panes.transport, Rect::new(0, 6, 100, 3));
+        app.mouse_down(50, 7, at(5000));
+        std::thread::sleep(Duration::from_millis(100));
+        let position = app.player.position().as_secs_f64();
+        assert!((1.3..2.0).contains(&position), "seeked to {position}s of 3s");
         app.mouse_drag(60);
         assert_eq!(app.sidebar_width, 20, "a click away from the dividers doesn't drag");
 
         // Drag both dividers; nothing is saved until the button is released.
-        app.mouse_down(20, 2);
+        app.mouse_down(20, 2, at(6000));
         app.mouse_drag(30);
         assert_eq!(app.sidebar_width, 30);
         assert_eq!(db::get_setting(&app.conn, "sidebar_width").unwrap(), None, "not saved mid-drag");
         app.mouse_up();
         assert_eq!(db::get_setting(&app.conn, "sidebar_width").unwrap().as_deref(), Some("30"));
-        app.mouse_down(70, 2);
+        app.mouse_down(70, 2, at(7000));
         app.mouse_drag(60);
         app.mouse_up();
         assert_eq!(app.right_width, 40);

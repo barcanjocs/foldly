@@ -443,9 +443,14 @@ same, since ratatui's hook doesn't know about mouse capture. `handle_mouse`
 routes left down/drag/up to `App::mouse_down`/`mouse_drag`/`mouse_up`:
 
 - down on a divider (either border of the pair, at `panes.songs.x` or
-  `panes.right.x`) grabs it as `dragging`; anywhere else in the sidebar or
-  songs it focuses that pane and selects the clicked row (`offset` from the
-  list's `ListState`, minus the top border);
+  `panes.right.x`) grabs it as `dragging`; on the progress bar
+  (`panes.transport`) it seeks to the clicked fraction of the track
+  (`seek_to_column`, over the bar's inside columns); anywhere else in the
+  sidebar or songs it focuses that pane and selects the clicked row (`offset`
+  from the list's `ListState`, minus the top border). A second click on the
+  same pane and row within `DOUBLE_CLICK` (400 ms, tracked in `last_click`)
+  calls `activate_selected`, i.e. acts like `Enter`. `mouse_down` takes the
+  click's `Instant` from `main.rs`, so tests pass their own times;
 - drag sets the grabbed column's width so the border sits under the pointer
   (rounded to the nearest percent), without saving;
 - up saves, so a drag costs one db write.
@@ -491,7 +496,8 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   injected with `Player::inject_error` (ignored vs. reconnect-and-resume),
   focus visibility (exactly one heavy border, on the focused pane, including
   an empty one) and the empty-list messages, the info pane (track details, "also in" excluding the shown playlist, the
-  source summary, hidden on a narrow screen), clicks and the wheel, dragging
+  source summary, hidden on a narrow screen), clicks, double-clicks (slow vs. quick) and
+  seeking on the progress bar, the wheel, dragging
   both dividers and `<`/`>` (clamping, saved on
   release, reloaded by a second `App`), and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help

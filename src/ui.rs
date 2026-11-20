@@ -25,7 +25,8 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("Enter  l", "Sidebar: go to its songs. Songs: play, queue the rest"),
             ("Backspace  h", "Back to the sidebar"),
             ("< >", "Move the divider right of the focused pane"),
-            ("Mouse", "Click to focus and select, wheel scrolls, drag dividers"),
+            ("Mouse", "Click selects, double-click plays, the wheel scrolls"),
+            ("", "Drag a divider to resize; click the progress bar to seek"),
             ("u", "Rescan now (changes are picked up automatically)"),
         ],
     ),
@@ -77,7 +78,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     ])
     .areas(main);
     // Remembered for mouse hit-testing (dividers, clicks, the wheel).
-    app.panes = PaneRects { sidebar, songs, right };
+    app.panes = PaneRects { sidebar, songs, right, transport };
 
     draw_sidebar(frame, app, sidebar);
     draw_songs(frame, app, songs);

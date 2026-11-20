@@ -192,7 +192,7 @@ fn handle_key(app: &mut App, key: KeyEvent) {
 
 fn handle_mouse(app: &mut App, mouse: MouseEvent) {
     match mouse.kind {
-        MouseEventKind::Down(MouseButton::Left) => app.mouse_down(mouse.column, mouse.row),
+        MouseEventKind::Down(MouseButton::Left) => app.mouse_down(mouse.column, mouse.row, std::time::Instant::now()),
         MouseEventKind::Drag(MouseButton::Left) => app.mouse_drag(mouse.column),
         MouseEventKind::Up(MouseButton::Left) => app.mouse_up(),
         // Capturing the mouse stops terminals turning the wheel into arrow keys, so do it here.

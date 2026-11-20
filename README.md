@@ -189,8 +189,9 @@ Drag either border between the three columns with the mouse, or press `<` and `>
 border on the right of the focused pane. The songs list always keeps at least a quarter of the
 width. Sizes are saved and restored next time.
 
-Clicking a pane focuses it and selects the row under the pointer; the wheel scrolls the pane it's
-over.
+Clicking a pane focuses it and selects the row under the pointer; double-clicking acts like
+`Enter` (plays a song, or opens a sidebar item's songs). Clicking the progress bar jumps to that
+point in the song. The wheel scrolls the pane it's over.
 
 Because foldly uses the mouse, selecting text on screen needs a modifier in most terminals:
 Shift-drag (or Option-drag in macOS Terminal and iTerm2).

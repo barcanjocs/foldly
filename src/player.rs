@@ -152,6 +152,12 @@ impl Player {
         self.current.as_ref().map_or(Duration::ZERO, |p| p.get_pos())
     }
 
+    pub fn seek_to(&self, position: Duration) {
+        if let Some(p) = &self.current {
+            let _ = p.try_seek(position);
+        }
+    }
+
     pub fn seek_by(&self, delta_secs: i64) {
         if let Some(p) = &self.current {
             let pos = p.get_pos().as_secs_f64() + delta_secs as f64;
