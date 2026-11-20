@@ -4,7 +4,8 @@ A terminal music player for one big music folder.
 
 foldly plays the music files you already own, all kept in a single folder. It scans that folder
 into a small local database and shows it in three columns: a sidebar with `All Tracks` and your
-playlists, the songs of whichever one is selected, and the play queue. It never writes to your
+playlists, the songs of whichever one is selected, and on the right, details of the selected song
+above the play queue. It never writes to your
 music files, and nothing leaves your machine.
 
 ## Install
@@ -91,6 +92,15 @@ number; files without tags show their file name. Playlists list their tracks in 
 
 Subfolders inside your music folder are scanned too, but foldly doesn't show the real folder
 tree: playlists are how you organise.
+
+### The info pane
+
+Above the queue, the info pane describes the song selected in the songs list (not the one
+playing, which is shown above the progress bar): title, artist, album, track and disc number,
+length, its file and size, and which other playlists it's in. With the sidebar focused it
+summarises the selected source instead: how many tracks, their total length, and how many are
+missing. On screens narrower than 100 columns, or quite short, the info pane is hidden and the
+queue takes the whole right column.
 
 ### Scanning
 

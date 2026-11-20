@@ -211,6 +211,23 @@ Track identity within a list is `(track id, entry id)` (`queue_key`): the entry
 id is `None` in All Tracks and the `playlist_tracks.id` inside a playlist,
 which is what distinguishes two occurrences of the same song.
 
+### The info pane
+
+`App::details: Option<Details>` is either `Details::Track { details, also_in }`
+or `Details::Source { tracks, duration, unknown, missing }`. Draw only reads
+it; `refresh_details`, called at the end of every `tick`, recomputes it when
+its `DetailsKey` (focus, source, selected `(track id, entry id)`) differs from
+the last one, and `reload` clears the key, since playlist membership, counts
+and tags may have changed. So details cost two small queries per selection
+change, never per frame.
+
+- Songs list focused with a selection: `db::track_details` (one row) plus
+  `db::playlists_containing` (distinct, alphabetical), minus the playlist
+  being shown, so "Also in" means *other* playlists.
+- Otherwise (sidebar focused, or nothing selected): `source_summary`, built
+  from the already-loaded `tracks` with no query. Durations are summed over
+  tracks that have one; the rest are counted as `unknown`.
+
 ### Filtering
 
 `set_tracks` precomputes one haystack per track: `"<label> <album>"` (label
@@ -361,6 +378,10 @@ the other keeps a bold-only selection, so both selections stay visible.
 - **Songs** — a `List` with `▌` as the highlight symbol, titled with the
   source's name; scan progress goes in a right-aligned top title. `♪` green
   bold marks the playing track, dimmed `(missing)` tracks.
+- **Right column** — when the screen is at least `INFO_MIN_SCREEN_WIDTH` (100)
+  wide and the column at least `INFO_MIN_COLUMN_HEIGHT` (16) tall, it is
+  split in half: the info pane (`draw_info`, a wrapping `Paragraph` titled
+  ` Selected `) over the queue. Otherwise the queue takes it all.
 - **Queue** — titled `Queue i/n`; played tracks dimmed, the current one green.
   `queue_window_start` picks the first row: 0 until the current track nears
   the bottom, then scrolled to keep `rows / 3` (at most `MAX_LOOKAHEAD`, 5)
@@ -416,7 +437,8 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
 
 - *db.rs* — playlist editing on an in-memory db: unique names ignoring case,
   duplicates allowed by `add_to_playlist`, `swap_entries`, `remove_entry`,
-  `add_tracks` skipping existing, deleting a playlist keeping its tracks.
+  `add_tracks` skipping existing, deleting a playlist keeping its tracks,
+  `track_details` and `playlists_containing` (distinct, alphabetical).
 - *scan.rs* — a real temp folder with dummy files: hidden files/folders and
   non-audio skipped, unchanged files not re-read, a vanished file marked
   missing but kept in its playlist, and restored when it returns.
@@ -433,7 +455,9 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   reordering, rename, creating and deleting playlists from the sidebar,
   playback and auto-advance, shuffle on/off, every repeat mode, audio errors
   injected with `Player::inject_error` (ignored vs. reconnect-and-resume),
-  clicks and the wheel, dragging both dividers and `<`/`>` (clamping, saved on
+  the info pane (track details, "also in" excluding the shown playlist, the
+  source summary, hidden on a narrow screen), clicks and the wheel, dragging
+  both dividers and `<`/`>` (clamping, saved on
   release, reloaded by a second `App`), and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help
   popup at two heights. A second ignored test, `picks_up_music_added_while_running`,

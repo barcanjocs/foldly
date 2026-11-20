@@ -31,9 +31,10 @@ truth for state — this file plus `git log` is all that is needed to resume.
   is reopened with the track resumed; `Ctrl-L` redraws; the queue panel
   scrolls only when needed; three columns (sidebar of sources | songs |
   queue) with focus switching, resizable (`<`/`>` or mouse drag) and saved
-  in `settings`. In progress: an info pane above the queue for the selected
-  song (step 2, stored data + "also in"; step 3, extra tags + a one-time
-  rescan). Tree green, 10 tests + 2 ignored end-to-end tests
+  in `settings`; an info pane above the queue for the selected song (stored
+  tags, file, "also in") or the selected source (count, length, missing).
+  In progress: step 3, extra tags (year, genre, format, quality) with a
+  one-time rescan. Tree green, 10 tests + 2 ignored end-to-end tests
   (need audio; see *Verification*). Reconnecting is tested by injecting
   errors, not by a real device switch. Docs split into README
   (users), this file (state), IMPLEMENTATION.md (internals).

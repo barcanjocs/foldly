@@ -7,9 +7,9 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Gauge, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 
-use crate::app::{App, InputPurpose, Location, Mode, Pane, PaneRects, Repeat, location_name};
+use crate::app::{App, Details, InputPurpose, Location, Mode, Pane, PaneRects, Repeat, location_name};
 
 const ACCENT: Color = Color::Cyan;
 
@@ -81,7 +81,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     draw_sidebar(frame, app, sidebar);
     draw_songs(frame, app, songs);
-    draw_queue(frame, app, right);
+    // The right column is info over queue, halved; on small screens the queue gets it all.
+    if frame.area().width >= INFO_MIN_SCREEN_WIDTH && right.height >= INFO_MIN_COLUMN_HEIGHT {
+        let [info, queue] = Layout::vertical([Constraint::Percentage(50), Constraint::Fill(1)]).areas(right);
+        draw_info(frame, app, info);
+        draw_queue(frame, app, queue);
+    } else {
+        draw_queue(frame, app, right);
+    }
     draw_transport(frame, app, transport);
     draw_status(frame, app, status);
     draw_popup(frame, app);
@@ -144,6 +151,71 @@ fn draw_songs(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items).block(block).highlight_style(highlight).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut app.list_state);
+}
+
+/// Below these sizes the info pane is hidden and the queue takes the whole right column.
+const INFO_MIN_SCREEN_WIDTH: u16 = 100;
+const INFO_MIN_COLUMN_HEIGHT: u16 = 16;
+
+/// The selected song's details, or a summary of the selected source.
+fn draw_info(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::bordered().title(" Selected ");
+    let dim = |s: String| Line::from(s).dark_gray();
+    let lines = match &app.details {
+        Some(Details::Track { details: d, also_in }) => {
+            let fallback = std::path::Path::new(&d.rel_path).file_stem().map(|s| s.to_string_lossy().into_owned());
+            let mut lines = vec![Line::from(d.title.clone().or(fallback).unwrap_or_default()).bold()];
+            if let Some(artist) = &d.artist {
+                lines.push(Line::from(artist.as_str()).fg(ACCENT));
+            }
+            if let Some(album) = &d.album {
+                lines.push(Line::from(album.as_str()).italic());
+            }
+            let numbers: Vec<String> = [
+                d.track_no.map(|n| format!("Track {n}")),
+                d.disc_no.map(|n| format!("Disc {n}")),
+                d.duration.map(fmt_time),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !numbers.is_empty() {
+                lines.push(Line::default());
+                lines.push(Line::from(numbers.join(" · ")));
+            }
+            lines.push(Line::default());
+            lines.push(dim(format!("{} · {}", d.rel_path, fmt_size(d.size))));
+            if d.missing {
+                lines.push(Line::from("Missing from the music folder").red());
+            }
+            lines.push(match also_in.as_slice() {
+                [] => dim("In no other playlists".into()),
+                names => Line::from(vec![Span::raw("Also in: ").dark_gray(), Span::raw(names.join(", "))]),
+            });
+            lines
+        }
+        Some(Details::Source { tracks, duration, unknown, missing }) => {
+            let mut summary = format!("{tracks} {}", if *tracks == 1 { "track" } else { "tracks" });
+            if *tracks > *unknown {
+                summary.push_str(&format!(" · {}", fmt_time(*duration)));
+            }
+            let mut lines = vec![Line::from(location_name(&app.location).to_string()).bold(), Line::from(summary)];
+            if *unknown > 0 {
+                lines.push(dim(format!("{unknown} without a known length")));
+            }
+            if *missing > 0 {
+                lines.push(Line::from(format!("{missing} missing from the music folder")).red());
+            }
+            lines
+        }
+        None => vec![dim("Nothing selected".into())],
+    };
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
+}
+
+fn fmt_size(bytes: i64) -> String {
+    let mb = bytes as f64 / 1_000_000.0;
+    if mb >= 1.0 { format!("{mb:.1} MB") } else { format!("{} KB", (bytes + 999) / 1000) }
 }
 
 /// Most upcoming tracks kept visible below the current one once the queue scrolls.

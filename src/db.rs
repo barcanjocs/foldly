@@ -65,6 +65,19 @@ impl Track {
     }
 }
 
+/// Everything the info pane shows about one track.
+pub struct TrackDetails {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub track_no: Option<u32>,
+    pub disc_no: Option<u32>,
+    pub duration: Option<Duration>,
+    pub rel_path: String,
+    pub size: i64,
+    pub missing: bool,
+}
+
 pub struct Playlist {
     pub id: i64,
     pub name: String,
@@ -138,6 +151,39 @@ pub fn all_tracks(conn: &Connection) -> Result<Vec<Track>> {
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |r| track_from_row(r, None))?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+pub fn track_details(conn: &Connection, track_id: i64) -> Result<Option<TrackDetails>> {
+    Ok(conn
+        .query_row(
+            "SELECT title, artist, album, track_no, disc_no, duration_ms, rel_path, size, missing
+             FROM tracks WHERE id = ?1",
+            [track_id],
+            |r| {
+                Ok(TrackDetails {
+                    title: r.get(0)?,
+                    artist: r.get(1)?,
+                    album: r.get(2)?,
+                    track_no: r.get(3)?,
+                    disc_no: r.get(4)?,
+                    duration: r.get::<_, Option<i64>>(5)?.map(|ms| Duration::from_millis(ms as u64)),
+                    rel_path: r.get(6)?,
+                    size: r.get(7)?,
+                    missing: r.get(8)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Names of the playlists holding `track_id`, alphabetically, each once.
+pub fn playlists_containing(conn: &Connection, track_id: i64) -> Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT p.id, p.name FROM playlists p JOIN playlist_tracks pt ON pt.playlist_id = p.id
+         WHERE pt.track_id = ?1 ORDER BY p.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([track_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
@@ -314,6 +360,17 @@ mod tests {
         rename_playlist(&conn, p, "Commute").unwrap();
         let lists = playlists(&conn).unwrap();
         assert_eq!((lists[0].name.as_str(), lists[0].track_count), ("Commute", 3));
+
+        // The info pane's queries.
+        let details = track_details(&conn, b).unwrap().unwrap();
+        assert_eq!((details.rel_path.as_str(), details.size, details.missing), ("b.mp3", 1, false));
+        assert!(track_details(&conn, 9999).unwrap().is_none());
+        let other = create_playlist(&conn, "Another").unwrap();
+        add_to_playlist(&conn, other, a).unwrap();
+        add_to_playlist(&conn, p, a).unwrap(); // a is now in Commute twice
+        let names: Vec<_> = playlists_containing(&conn, a).unwrap().into_iter().map(|(_, n)| n).collect();
+        assert_eq!(names, ["Another", "Commute"], "alphabetical, each once");
+        delete_playlist(&conn, other).unwrap();
 
         delete_playlist(&conn, p).unwrap();
         assert!(playlists(&conn).unwrap().is_empty());

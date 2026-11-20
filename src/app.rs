@@ -14,7 +14,7 @@ use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
-use crate::db::{self, Playlist, Track};
+use crate::db::{self, Playlist, Track, TrackDetails};
 use crate::filter::Filter;
 use crate::player::Player;
 use crate::scan::{self, ScanEvent};
@@ -63,6 +63,31 @@ pub struct PaneRects {
     pub sidebar: Rect,
     pub songs: Rect,
     pub right: Rect,
+}
+
+/// What the info pane shows: the selected song, or a summary of the selected source when the
+/// sidebar has focus (or the songs list is empty).
+pub enum Details {
+    Track {
+        details: TrackDetails,
+        /// Other playlists holding this track (not the one being shown).
+        also_in: Vec<String>,
+    },
+    Source {
+        tracks: usize,
+        /// Sum of the known lengths; `unknown` tracks have none.
+        duration: Duration,
+        unknown: usize,
+        missing: usize,
+    },
+}
+
+/// What `details` was computed for; when this changes, it is recomputed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DetailsKey {
+    focus: Pane,
+    source: Location,
+    track: Option<(i64, Option<i64>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +179,9 @@ pub struct App {
     pub filter: String,
     pub list_state: ListState,
     pub mode: Mode,
+    /// The info pane's contents, kept up to date by `tick` (draw never queries the db).
+    pub details: Option<Details>,
+    details_key: Option<DetailsKey>,
 
     /// What plays, in play order (shuffled when shuffle is on).
     pub queue: Vec<Track>,
@@ -199,6 +227,8 @@ impl App {
             filter: String::new(),
             list_state: ListState::default(),
             mode: Mode::Normal,
+            details: None,
+            details_key: None,
             queue: Vec::new(),
             unshuffled: Vec::new(),
             shuffle: false,
@@ -265,6 +295,8 @@ impl App {
     /// Re-reads the sidebar and the songs list, keeping both selections where possible. If
     /// the shown playlist was deleted, the source now at its position is shown instead.
     pub fn reload(&mut self) -> Result<()> {
+        // Playlist membership, counts or tags may have changed.
+        self.details_key = None;
         self.sidebar = self.load_sidebar()?;
         match self.sidebar.iter().position(|item| item.location.same_source(&self.location)) {
             Some(i) => {
@@ -767,6 +799,50 @@ impl App {
             }
         }
         self.poll_scan();
+        self.refresh_details();
+    }
+
+    /// Recomputes the info pane when the selection, focus or source changed since last time.
+    fn refresh_details(&mut self) {
+        let track = self.selected_track().map(queue_key);
+        let key = DetailsKey { focus: self.focus, source: self.location.clone(), track };
+        if self.details_key.as_ref() == Some(&key) {
+            return;
+        }
+        let result = match (self.focus, track) {
+            (Pane::Songs, Some((id, _))) => self.track_info(id),
+            _ => Ok(Some(self.source_summary())),
+        };
+        match result {
+            Ok(details) => self.details = details,
+            Err(err) => self.report(Err(err)),
+        }
+        self.details_key = Some(key);
+    }
+
+    fn track_info(&self, track_id: i64) -> Result<Option<Details>> {
+        let Some(details) = db::track_details(&self.conn, track_id)? else { return Ok(None) };
+        let shown = match self.location {
+            Location::Playlist { id, .. } => Some(id),
+            Location::AllTracks => None,
+        };
+        let also_in = db::playlists_containing(&self.conn, track_id)?
+            .into_iter()
+            .filter(|(id, _)| Some(*id) != shown)
+            .map(|(_, name)| name)
+            .collect();
+        Ok(Some(Details::Track { details, also_in }))
+    }
+
+    /// Built from the songs already loaded for the source; no query needed.
+    fn source_summary(&self) -> Details {
+        let known: Vec<Duration> = self.tracks.iter().filter_map(|t| t.duration).collect();
+        Details::Source {
+            tracks: self.tracks.len(),
+            duration: known.iter().sum(),
+            unknown: self.tracks.len() - known.len(),
+            missing: self.tracks.iter().filter(|t| t.missing).count(),
+        }
     }
 
     fn poll_watch(&mut self) {
@@ -990,6 +1066,25 @@ mod tests {
         assert_eq!(app.message.as_deref(), Some("added 1 track to Mix (2 already there)"));
         app.set_filter(String::new());
 
+        // The info pane: the selected song, with the playlists it's in.
+        app.select(2);
+        app.tick();
+        match &app.details {
+            Some(Details::Track { details, also_in }) => {
+                assert_eq!((details.title.as_deref(), details.track_no), (Some("Tone 3"), Some(3)));
+                assert_eq!(also_in, &["Mix"]);
+            }
+            _ => panic!("expected track details"),
+        }
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 26)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        let screen = format!("{}", terminal.backend());
+        println!("{screen}");
+        assert!(screen.contains("Selected") && screen.contains("Also in: Mix") && screen.contains("Track 3"));
+        let mut small = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 26)).unwrap();
+        small.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        assert!(!format!("{}", small.backend()).contains("Selected"), "hidden on narrow screens");
+
         // Moving through the sidebar previews each source; Enter moves into its songs.
         let titles =
             |app: &App| -> Vec<String> { (0..app.visible.len()).filter_map(|i| app.track(i)?.title.clone()).collect() };
@@ -1001,8 +1096,20 @@ mod tests {
         app.move_selection(-1);
         assert_eq!(app.location, Location::AllTracks);
         app.move_selection(1);
+        // With the sidebar focused, the info pane summarises the source.
+        app.tick();
+        match &app.details {
+            Some(Details::Source { tracks, duration, unknown, missing }) => {
+                assert_eq!((*tracks, *unknown, *missing), (3, 0, 0));
+                assert!(duration.as_secs_f64() > 8.5, "{duration:?}");
+            }
+            _ => panic!("expected a source summary"),
+        }
         app.activate_selected();
         assert_eq!(app.focus, Pane::Songs);
+        // Inside Mix, Tone 3 isn't in any *other* playlist.
+        app.tick();
+        assert!(matches!(&app.details, Some(Details::Track { also_in, .. }) if also_in.is_empty()));
 
         // Move Tone 1 above Tone 3.
         app.select(1);
