@@ -49,6 +49,7 @@ pub struct SidebarItem {
 pub enum Pane {
     Sidebar,
     Songs,
+    Queue,
 }
 
 /// The two draggable borders between the three columns.
@@ -64,6 +65,8 @@ pub struct PaneRects {
     pub sidebar: Rect,
     pub songs: Rect,
     pub right: Rect,
+    /// The queue's part of the right column (all of it when the info pane is hidden).
+    pub queue: Rect,
     /// The progress bar, including its border.
     pub transport: Rect,
 }
@@ -189,6 +192,11 @@ pub struct App {
     /// What plays, in play order (shuffled when shuffle is on).
     pub queue: Vec<Track>,
     pub queue_index: Option<usize>,
+    /// The queue pane's selection; `None` means "on the current track", which is where it
+    /// goes back to whenever the queue is rebuilt.
+    queue_selected: Option<usize>,
+    /// First queue row the last frame showed, for mouse clicks. Set by `ui::draw`.
+    pub queue_offset: usize,
     /// The queue in its original order, restored when shuffle is turned off.
     unshuffled: Vec<Track>,
     pub shuffle: bool,
@@ -245,6 +253,8 @@ impl App {
             shuffle: false,
             repeat: Repeat::Off,
             queue_index: None,
+            queue_selected: None,
+            queue_offset: 0,
             now_playing: None,
             player,
             message: None,
@@ -381,6 +391,12 @@ impl App {
 
     fn move_in(&mut self, pane: Pane, delta: isize) {
         match pane {
+            Pane::Queue => {
+                if let Some(cursor) = self.queue_cursor() {
+                    let last = self.queue.len() as isize - 1;
+                    self.queue_selected = Some((cursor as isize + delta).clamp(0, last) as usize);
+                }
+            }
             Pane::Songs => {
                 let current = self.list_state.selected().unwrap_or(0) as isize;
                 self.select((current + delta).max(0) as usize);
@@ -404,6 +420,7 @@ impl App {
         match self.focus {
             Pane::Songs => self.select(0),
             Pane::Sidebar => self.select_source(0),
+            Pane::Queue => self.move_in(Pane::Queue, isize::MIN / 2),
         }
     }
 
@@ -411,7 +428,15 @@ impl App {
         match self.focus {
             Pane::Songs => self.select(usize::MAX),
             Pane::Sidebar => self.select_source(self.sidebar.len() - 1),
+            Pane::Queue => self.move_in(Pane::Queue, isize::MAX / 2),
         }
+    }
+
+    /// The queue pane's selected row: the chosen one, else the current track. `None` when
+    /// nothing is loaded.
+    pub fn queue_cursor(&self) -> Option<usize> {
+        self.queue_index?;
+        self.queue_selected.filter(|&i| i < self.queue.len()).or(self.queue_index)
     }
 
     // --- focus ----------------------------------------------------------------------------
@@ -420,10 +445,20 @@ impl App {
         self.focus = pane;
     }
 
+    /// Tab: sidebar → songs → queue → sidebar.
     pub fn toggle_focus(&mut self) {
         self.focus = match self.focus {
             Pane::Sidebar => Pane::Songs,
-            Pane::Songs => Pane::Sidebar,
+            Pane::Songs => Pane::Queue,
+            Pane::Queue => Pane::Sidebar,
+        };
+    }
+
+    /// `h`: one pane to the left.
+    pub fn focus_left(&mut self) {
+        self.focus = match self.focus {
+            Pane::Queue => Pane::Songs,
+            Pane::Songs | Pane::Sidebar => Pane::Sidebar,
         };
     }
 
@@ -432,9 +467,20 @@ impl App {
     /// Enter: in the sidebar, moves into the songs list; in the songs list, plays the track and
     /// queues the rest of the list.
     pub fn activate_selected(&mut self) {
-        if self.focus == Pane::Sidebar {
-            self.focus = Pane::Songs;
-            return;
+        match self.focus {
+            Pane::Sidebar => {
+                self.focus = Pane::Songs;
+                return;
+            }
+            Pane::Queue => {
+                // Jump to the selected track; the cursor then follows the current one again.
+                if let Some(i) = self.queue_cursor() {
+                    self.play_index(i);
+                    self.queue_selected = None;
+                }
+                return;
+            }
+            Pane::Songs => {}
         }
         let result = match self.selected_track() {
             Some(t) if t.missing => Err(anyhow::anyhow!("{} is missing from the music folder", t.rel_path)),
@@ -444,6 +490,7 @@ impl App {
                 self.unshuffled =
                     self.visible.iter().map(|&i| &self.tracks[i]).filter(|t| !t.missing).cloned().collect();
                 let start = self.unshuffled.iter().position(|t| queue_key(t) == chosen).unwrap_or(0);
+                self.queue_selected = None;
                 if self.shuffle {
                     self.queue = shuffled_from(&self.unshuffled, start);
                     self.play_index(0);
@@ -465,16 +512,28 @@ impl App {
         }
     }
 
-    /// Opens the playlist picker for the selected track.
+    /// Opens the playlist picker for the selected track (in the songs list or the queue).
     pub fn start_add_to_playlist(&mut self) {
-        match (self.focus, self.selected_track().map(|t| t.id)) {
-            (Pane::Songs, Some(id)) => self.open_picker(vec![id], false, true),
+        match (self.focus, self.selected_track().map(|t| t.id), self.queue_cursor()) {
+            (Pane::Songs, Some(id), _) => self.open_picker(vec![id], false, true),
+            // Queued tracks may come from anywhere, so the shown playlist is offered too.
+            (Pane::Queue, _, Some(i)) => self.open_picker(vec![self.queue[i].id], false, false),
             _ => self.message = Some("select a song to add it to a playlist (A adds the whole list)".into()),
         }
     }
 
-    /// Opens the playlist picker for every track in the songs list (as filtered).
+    /// Opens the playlist picker for every track in the songs list (as filtered), or in the
+    /// queue when the queue is focused.
     pub fn start_add_all_to_playlist(&mut self) {
+        if self.focus == Pane::Queue {
+            let ids: Vec<i64> = self.queue.iter().map(|t| t.id).collect();
+            if ids.is_empty() {
+                self.message = Some("the queue is empty".into());
+            } else {
+                self.open_picker(ids, true, false);
+            }
+            return;
+        }
         let ids: Vec<i64> = self.visible.iter().map(|&i| self.tracks[i].id).collect();
         if ids.is_empty() {
             self.message = Some("no tracks here to add".into());
@@ -522,8 +581,13 @@ impl App {
     /// In the songs list of a playlist, removes the selected track from it; in the sidebar,
     /// asks to delete the selected playlist.
     pub fn delete_selected(&mut self) {
+        if self.focus == Pane::Queue {
+            self.queue_remove();
+            return;
+        }
         let Location::Playlist { id, name } = &self.location else { return };
         match self.focus {
+            Pane::Queue => {}
             Pane::Sidebar => self.mode = Mode::ConfirmDelete { playlist_id: *id, name: name.clone() },
             Pane::Songs => {
                 let Some(entry) = self.selected_track().and_then(|t| t.entry_id) else { return };
@@ -535,6 +599,10 @@ impl App {
 
     /// Moves the selected playlist track up (-1) or down (+1).
     pub fn move_entry(&mut self, delta: isize) {
+        if self.focus == Pane::Queue {
+            self.queue_move(delta);
+            return;
+        }
         if self.focus != Pane::Songs || !matches!(self.location, Location::Playlist { .. }) {
             return;
         }
@@ -550,6 +618,61 @@ impl App {
             self.report(result);
             self.select(to as usize);
         }
+    }
+
+    // --- queue editing --------------------------------------------------------------------
+    //
+    // `queue` is the play order and `unshuffled` the original order of the same tracks. With
+    // shuffle off they're in the same order, so moves apply to both; with shuffle on, a move
+    // only changes the play order. Removals always apply to both.
+
+    /// Removes the selected track from the queue. The current track can't be removed (skip it
+    /// with `n`), so `queue_index` always points at what's playing.
+    fn queue_remove(&mut self) {
+        let (Some(i), Some(current)) = (self.queue_cursor(), self.queue_index) else { return };
+        if i == current {
+            self.message = Some("that's the song playing; n skips it".into());
+            return;
+        }
+        let removed = queue_key(&self.queue.remove(i));
+        self.unshuffled.retain(|t| queue_key(t) != removed);
+        if i < current {
+            self.queue_index = Some(current - 1);
+        }
+        self.queue_selected = Some(i.min(self.queue.len() - 1));
+    }
+
+    /// Moves the selected queue track later (+1) or earlier (-1); the selection moves with it.
+    fn queue_move(&mut self, delta: isize) {
+        let (Some(i), Some(current)) = (self.queue_cursor(), self.queue_index) else { return };
+        let Some(j) = i.checked_add_signed(delta).filter(|&j| j < self.queue.len()) else { return };
+        self.queue.swap(i, j);
+        if !self.shuffle {
+            self.unshuffled.swap(i, j);
+        }
+        self.queue_index = Some(if current == i {
+            j
+        } else if current == j {
+            i
+        } else {
+            current
+        });
+        self.queue_selected = Some(j);
+    }
+
+    /// `c`: drops everything queued after the current track.
+    pub fn queue_clear_upcoming(&mut self) {
+        let Some(current) = self.queue_index else { return };
+        let dropped = self.queue.len() - current - 1;
+        if dropped == 0 {
+            self.message = Some("nothing queued after this song".into());
+            return;
+        }
+        self.queue.truncate(current + 1);
+        let kept: std::collections::HashSet<_> = self.queue.iter().map(queue_key).collect();
+        self.unshuffled.retain(|t| kept.contains(&queue_key(t)));
+        self.queue_selected = None;
+        self.message = Some(format!("cleared {dropped} upcoming {}", if dropped == 1 { "song" } else { "songs" }));
     }
 
     // --- prompts --------------------------------------------------------------------------
@@ -651,6 +774,7 @@ impl App {
         } else {
             if self.shuffle {
                 self.queue = shuffled_from(&self.unshuffled, fastrand::usize(..self.unshuffled.len()));
+                self.queue_selected = None;
             }
             self.play_index(0);
         }
@@ -680,7 +804,8 @@ impl App {
                 self.sidebar_width = self.sidebar_width.saturating_add_signed(delta);
                 self.clamp_widths(Divider::SidebarSongs);
             }
-            Pane::Songs => {
+            // The queue has no divider on its right, so it uses the one on its left.
+            Pane::Songs | Pane::Queue => {
                 self.right_width = self.right_width.saturating_add_signed(-delta);
                 self.clamp_widths(Divider::SongsRight);
             }
@@ -714,6 +839,8 @@ impl App {
             Some(Pane::Sidebar)
         } else if inside(self.panes.songs) {
             Some(Pane::Songs)
+        } else if inside(self.panes.queue) {
+            Some(Pane::Queue)
         } else {
             None
         }
@@ -745,6 +872,7 @@ impl App {
         let (area, offset) = match pane {
             Pane::Sidebar => (self.panes.sidebar, self.sidebar_state.offset()),
             Pane::Songs => (self.panes.songs, self.list_state.offset()),
+            Pane::Queue => (self.panes.queue, self.queue_offset),
         };
         // Rows inside the border; the top border row selects nothing.
         if row > area.y && row + 1 < area.y + area.height {
@@ -752,6 +880,9 @@ impl App {
             match pane {
                 Pane::Sidebar if index < self.sidebar.len() => self.select_source(index),
                 Pane::Songs if index < self.visible.len() => self.select(index),
+                Pane::Queue if self.queue_index.is_some() && index < self.queue.len() => {
+                    self.queue_selected = Some(index)
+                }
                 _ => return,
             }
             let double = self
@@ -836,6 +967,7 @@ impl App {
             self.queue = self.unshuffled.clone();
             self.queue_index = Some(position);
         }
+        self.queue_selected = None;
     }
 
     pub fn stop(&mut self) {
@@ -874,13 +1006,16 @@ impl App {
 
     /// Recomputes the info pane when the selection, focus or source changed since last time.
     fn refresh_details(&mut self) {
-        let track = self.selected_track().map(queue_key);
+        let track = match self.focus {
+            Pane::Queue => self.queue_cursor().map(|i| queue_key(&self.queue[i])),
+            _ => self.selected_track().map(queue_key),
+        };
         let key = DetailsKey { focus: self.focus, source: self.location.clone(), track };
         if self.details_key.as_ref() == Some(&key) {
             return;
         }
         let result = match (self.focus, track) {
-            (Pane::Songs, Some((id, _))) => self.track_info(id),
+            (Pane::Songs | Pane::Queue, Some((id, _))) => self.track_info(id),
             _ => Ok(Some(self.source_summary())),
         };
         match result {
@@ -1018,6 +1153,7 @@ impl App {
         };
         let current = decode_keys(&queue).get(index).copied();
         self.queue = rebuild(&queue);
+        self.queue_selected = None;
         self.unshuffled = unshuffled.map_or_else(|| self.queue.clone(), |keys| rebuild(&keys));
         self.saved_queue = Some((encode_keys(&self.queue), encode_keys(&self.unshuffled)));
 
@@ -1609,6 +1745,78 @@ mod tests {
             app.handle_media_command(E::Stop);
             assert!(app.now_playing.is_none());
             app.tick(); // publishing a stopped player is fine too
+        }
+
+        // The queue pane, focused: a cursor, jumping, moving, removing and clearing.
+        {
+            let titles = |list: &[Track]| list.iter().map(|t| t.display_title()).collect::<Vec<_>>();
+            app.focus_pane(Pane::Songs);
+            app.select(0);
+            app.activate_selected(); // Tone 1; queue Tone 1, Tone 3, Tone 2
+            app.toggle_focus();
+            assert_eq!((app.focus, app.queue_cursor()), (Pane::Queue, Some(0)), "Tab: songs → queue, on the current");
+            app.move_selection(1);
+            app.tick();
+            assert!(
+                matches!(&app.details, Some(Details::Track { details, .. }) if details.title.as_deref() == Some("Tone 3"))
+            );
+
+            app.activate_selected();
+            assert_eq!((app.queue_index, app.queue_cursor()), (Some(1), Some(1)), "jumped to Tone 3");
+            app.move_entry(1);
+            assert_eq!(titles(&app.queue), ["Tone 1", "Tone 2", "Tone 3"]);
+            assert_eq!(titles(&app.unshuffled), titles(&app.queue), "shuffle off: both orders change");
+            assert_eq!((app.queue_index, app.queue_cursor()), (Some(2), Some(2)), "the playing song moved with it");
+
+            app.move_selection(-2);
+            app.delete_selected();
+            assert_eq!((titles(&app.queue), app.queue_index), (vec!["Tone 2".to_string(), "Tone 3".into()], Some(1)));
+            assert_eq!(titles(&app.unshuffled), ["Tone 2", "Tone 3"]);
+            assert_eq!(app.now_playing.as_ref().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
+            app.move_selection(1);
+            app.delete_selected();
+            assert_eq!(app.message.as_deref(), Some("that's the song playing; n skips it"));
+            assert_eq!(app.queue.len(), 2);
+
+            app.move_selection(-1);
+            app.activate_selected(); // Tone 2, with Tone 3 after it
+            app.queue_clear_upcoming();
+            assert_eq!(
+                (titles(&app.queue), app.message.as_deref()),
+                (vec!["Tone 2".to_string()], Some("cleared 1 upcoming song"))
+            );
+            app.queue_clear_upcoming();
+            assert_eq!(app.message.as_deref(), Some("nothing queued after this song"));
+
+            // With shuffle on, moving only changes the play order; shuffle off restores the list order.
+            app.focus_pane(Pane::Songs);
+            app.select(0);
+            app.activate_selected();
+            app.toggle_shuffle();
+            app.focus_pane(Pane::Queue);
+            app.move_entry(1);
+            assert_eq!(app.queue_index, Some(1), "the playing song moved later");
+            assert_eq!(titles(&app.unshuffled), ["Tone 1", "Tone 3", "Tone 2"]);
+            app.toggle_shuffle();
+            assert_eq!(
+                (titles(&app.queue), app.queue_index),
+                (vec!["Tone 1".to_string(), "Tone 3".into(), "Tone 2".into()], Some(0))
+            );
+
+            // The focused queue has the heavy border; a click selects a row, a double-click jumps.
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 26)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+            let row =
+                |y: u16| (0..120).map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string()).collect::<String>();
+            let q = app.panes.queue;
+            assert!(row(q.y).contains('┏') && !row(0).contains('┏'), "{}\n{}", row(0), row(q.y));
+            println!("{}", terminal.backend());
+            let t0 = Instant::now();
+            app.mouse_down(q.x + 5, q.y + 3, t0);
+            assert_eq!((app.focus, app.queue_cursor()), (Pane::Queue, Some(2)));
+            app.mouse_down(q.x + 5, q.y + 3, t0 + Duration::from_millis(150));
+            assert_eq!(app.queue_index, Some(2), "double-click jumped to Tone 2");
+            app.stop();
         }
 
         // Quitting saves the session; the next start shows the same playlist with the same queue,

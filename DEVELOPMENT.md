@@ -46,7 +46,8 @@ truth for state — this file plus `git log` is all that is needed to resume.
 - Decision (2026-11-20): foldly's volume stays separate from the system
   volume. macOS volume keys never reach apps, and the user prefers an
   app-level volume since macOS has no per-app mixer; don't try to link them.
-- Next: backlog item D (interactive queue pane), then C.
+- Next: dragging on the progress bar to scrub (asked for), then C. Since
+  v0.4.0 (unreleased): the interactive queue pane (D).
 - Dependency watch: souvlaki 0.9 pulls in `block` 0.1.6 on macOS, which
   cargo warns "will be rejected by a future version of Rust"; souvlaki has a
   1.0 rewrite in progress. If the warning becomes an error, move to 1.0 or
@@ -72,13 +73,8 @@ from its scope note alone, without re-deriving context.
       an artist shows all their songs grouped by album. `A` from the sidebar
       then adds an exact artist/album (unlike filter + `A`). Untagged tracks
       go in "Unknown".
-- [ ] **D. Interactive queue panel** (medium). Make the queue a third
-      `Pane` (`Tab` cycles sidebar → songs → queue; clicks focus it too);
-      while focused, `j`/`k` move, `Enter` jumps to a track, `d` removes it,
-      `J`/`K` reorder, `c` clears upcoming. Needs a `ListState` for the
-      queue (its window currently comes from `queue_window_start`), and
-      edits applied to both `queue` and `unshuffled` (see the shuffle
-      invariant in IMPLEMENTATION.md).
+- [x] **D. Interactive queue panel** — done 2026-11-20: third `Pane`,
+      cursor, jump, remove, `J`/`K`, clear upcoming, `a`/`A`.
 - [ ] **E. M3U export / import** (small-medium). `E` on a playlist writes
       `<name>.m3u` with paths relative to the music root (into the root, or
       a chosen folder); import reads `.m3u` files found during the scan, or

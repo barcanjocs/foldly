@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Gauge, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -23,9 +23,10 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("↑ ↓  j k", "Move the selection in the focused pane"),
             ("PgUp PgDn", "Move 10 at a time"),
             ("g G  Home End", "Jump to the top / bottom"),
-            ("Tab", "Switch between the sidebar and the songs list"),
+            ("Tab", "Focus the next pane: sidebar → songs → queue"),
             ("Enter  l", "Sidebar: go to its songs. Songs: play, queue the rest"),
-            ("Backspace  h", "Back to the sidebar"),
+            ("h", "Focus the pane to the left"),
+            ("Backspace", "Back to the sidebar"),
             ("< >", "Move the divider right of the focused pane"),
             ("Mouse", "Click selects, double-click plays, the wheel scrolls"),
             ("", "Drag a divider to resize; click the progress bar to seek"),
@@ -57,6 +58,16 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "Queue (when focused)",
+        &[
+            ("Enter  l", "Jump to the selected song"),
+            ("d", "Remove it from the queue (n skips the one playing)"),
+            ("J K", "Play it later / earlier"),
+            ("c", "Clear everything after the current song"),
+            ("a  A", "Add it / the whole queue to a playlist"),
+        ],
+    ),
+    (
         "Playlists",
         &[
             ("a", "Add the selected track to a playlist"),
@@ -80,19 +91,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Constraint::Percentage(app.right_width),
     ])
     .areas(main);
+    // The right column is info over queue, halved; on small screens the queue gets it all.
+    let (info, queue) = if frame.area().width >= INFO_MIN_SCREEN_WIDTH && right.height >= INFO_MIN_COLUMN_HEIGHT {
+        let [info, queue] = Layout::vertical([Constraint::Percentage(50), Constraint::Fill(1)]).areas(right);
+        (Some(info), queue)
+    } else {
+        (None, right)
+    };
     // Remembered for mouse hit-testing (dividers, clicks, the wheel).
-    app.panes = PaneRects { sidebar, songs, right, transport };
+    app.panes = PaneRects { sidebar, songs, right, queue, transport };
 
     draw_sidebar(frame, app, sidebar);
     draw_songs(frame, app, songs);
-    // The right column is info over queue, halved; on small screens the queue gets it all.
-    if frame.area().width >= INFO_MIN_SCREEN_WIDTH && right.height >= INFO_MIN_COLUMN_HEIGHT {
-        let [info, queue] = Layout::vertical([Constraint::Percentage(50), Constraint::Fill(1)]).areas(right);
+    if let Some(info) = info {
         draw_info(frame, app, info);
-        draw_queue(frame, app, queue);
-    } else {
-        draw_queue(frame, app, right);
     }
+    draw_queue(frame, app, queue);
     draw_transport(frame, app, transport);
     draw_status(frame, app, status);
     draw_popup(frame, app);
@@ -360,12 +374,13 @@ pub fn queue_window_start(current: usize, len: usize, rows: usize) -> usize {
 }
 
 /// The play queue: played tracks dimmed, the current track highlighted, then what's next.
-fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     let title = match app.queue_index {
         Some(i) => format!(" Queue {}/{} ", i + 1, app.queue.len()),
         None => " Queue ".to_string(),
     };
-    let block = quiet_block(title);
+    let (block, highlight) = pane_block(app, Pane::Queue, title);
+    let focused = app.focus == Pane::Queue;
     let Some(current) = app.queue_index else {
         let hint = Line::from("Press Enter on a track to play it and queue the rest of the list.").dark_gray();
         frame.render_widget(Paragraph::new(hint).wrap(ratatui::widgets::Wrap { trim: true }).block(block), area);
@@ -374,8 +389,18 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
 
     // Only build the rows that fit; a queue can hold the whole library.
     let rows = area.height.saturating_sub(2) as usize;
-    let start = queue_window_start(current, app.queue.len(), rows);
-    let width = list_row_width(area, false);
+    let mut start = queue_window_start(current, app.queue.len(), rows);
+    // When focused, the selection may wander off the automatic window: scroll to keep it in view.
+    let cursor = app.queue_cursor().filter(|_| focused);
+    if let Some(cursor) = cursor {
+        if cursor < start {
+            start = cursor;
+        } else if rows > 0 && cursor >= start + rows {
+            start = cursor + 1 - rows;
+        }
+    }
+    app.queue_offset = start;
+    let width = list_row_width(area, focused);
     let items: Vec<ListItem> = app.queue[start..(start + rows).min(app.queue.len())]
         .iter()
         .enumerate()
@@ -388,7 +413,15 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
             ListItem::new(track_row(track, current, style, width))
         })
         .collect();
-    frame.render_widget(List::new(items).block(block), area);
+    let list = List::new(items).block(block);
+    match cursor {
+        Some(cursor) => {
+            // The rows are already the visible slice, so the selection is relative to it.
+            let mut state = ListState::default().with_selected(Some(cursor - start));
+            frame.render_stateful_widget(list.highlight_style(highlight).highlight_symbol("▌"), area, &mut state);
+        }
+        None => frame.render_widget(list, area),
+    }
 }
 
 fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
@@ -459,6 +492,9 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
             }
             (Pane::Songs, Location::AllTracks) => {
                 " enter play · / filter · a/A add to playlist · tab sidebar · space pause · n/p · z/r · ? help"
+            }
+            (Pane::Queue, _) => {
+                " enter jump to · d remove · J/K move · c clear upcoming · a/A add to playlist · tab sidebar · ? help"
             }
             (Pane::Songs, Location::Playlist { .. }) => {
                 " enter play · / filter · a/A add · d remove · J/K move · tab sidebar · space · z/r · ? help"

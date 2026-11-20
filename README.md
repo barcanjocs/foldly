@@ -57,9 +57,10 @@ usual. Inside foldly, press `?` for every key.
 | Key | Action |
 |-----|--------|
 | `↑`/`↓`, `j`/`k` | Move the selection in the focused pane (`PgUp`/`PgDn` by 10, `g`/`G` to top/bottom) |
-| `Tab` | Switch focus between the sidebar and the songs list |
+| `Tab` | Focus the next pane: sidebar → songs → queue |
 | `Enter`/`l` | Sidebar: go to its songs. Songs: play the track and queue the rest of the list |
-| `Backspace`/`h` | Back to the sidebar |
+| `h` | Focus the pane to the left |
+| `Backspace` | Back to the sidebar |
 | `<` / `>` | Move the divider to the right of the focused pane (or drag dividers with the mouse) |
 | `/` | Fuzzy filter the songs list; `Enter` plays the top match, `Esc` clears |
 | `Space` | Pause / resume |
@@ -171,6 +172,20 @@ Playing a track queues the rest of the list it came from (the filtered list, if 
 right-hand panel shows the queue: tracks already played (dimmed), the current one (green), then
 what's next. It scrolls only once the current track nears the bottom, keeping a few upcoming
 tracks in view. The song playing is shown above the progress bar.
+
+Focus the queue (`Tab`, or click it) to edit it. A cursor starts on the current song, and the
+info pane shows whichever song it's on:
+
+| Key | Action |
+|-----|--------|
+| `Enter`/`l`, double-click | Jump to the selected song |
+| `d` | Remove it from the queue (the song playing can't be removed; `n` skips it) |
+| `J` / `K` | Play it later / earlier |
+| `c` | Clear everything after the current song |
+| `a` / `A` | Add it / the whole queue to a playlist |
+
+With shuffle on, `J`/`K` only change the shuffled order, so turning shuffle off still returns to
+the list's own order.
 
 - **Shuffle** (`z`): the chosen track plays first, then the rest in random order. Turning it on
   mid-song keeps the song playing and shuffles the rest; turning it off returns to the original

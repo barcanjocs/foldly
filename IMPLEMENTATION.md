@@ -346,6 +346,37 @@ queue_index: position in `queue` of the current track
 
 The queue is a snapshot: editing a playlist doesn't change what's queued.
 
+### Editing the queue (`Pane::Queue`)
+
+The queue is the third focusable pane (`Tab` cycles sidebar → songs → queue,
+`h` is `focus_left`). Its cursor is `queue_selected: Option<usize>`, read
+through `queue_cursor()`: the chosen row if it's still in range, else
+`queue_index`. Everything that rebuilds the queue (Enter on a song, toggling
+shuffle, a repeat-all reshuffle, restoring a session) resets it to `None`, so
+the cursor goes back to following the current track. Jumping (`Enter`,
+double-click) calls `play_index(cursor)` and resets it too.
+
+Edits keep the shuffle invariant (`unshuffled` holds the same tracks as
+`queue`; with shuffle off, in the same order):
+
+- `queue_remove` takes the track out of `queue` by index and out of
+  `unshuffled` by `queue_key`, decrementing `queue_index` if the removed row
+  was before it. Removing the current track is refused, so `queue_index`
+  always points at what's playing.
+- `queue_move` swaps with the neighbour in `queue`, and in `unshuffled` too
+  when shuffle is off (same order, same indices); with shuffle on only the
+  play order changes, so shuffle-off still restores the list order.
+  `queue_index` follows the current track if it was one of the pair.
+- `queue_clear_upcoming` truncates `queue` after the current track and keeps
+  only the remaining keys in `unshuffled`.
+
+The pane-dependent actions route on `focus`: `activate_selected`,
+`delete_selected`, `move_entry`, `start_add_to_playlist` (queue: the cursor's
+track, offering the shown playlist too) and `start_add_all_to_playlist`
+(queue: the whole queue). `refresh_details` describes the cursor's track
+while the queue is focused. `<`/`>` from the queue move the songs|right
+divider, the one on its left.
+
 ### Resuming
 
 `App::save_session` writes, in one transaction: `session_location` (`all` or
@@ -488,7 +519,11 @@ symbol for lists that have one.
   are ordered by usefulness with no spacer lines (title, artist, album, a
   missing warning, track/disc/length, year/genre, "also in", quality, file),
   because half a column can cut the end off.
-- **Queue** — titled `Queue i/n`; played tracks dimmed, the current one green.
+- **Queue** — titled `Queue i/n`, framed by `pane_block` like the other
+  focusable panes; played tracks dimmed, the current one green. When
+  focused, the window is nudged to keep the cursor in view, the cursor row
+  gets the `▌` highlight (a fresh `ListState` over the visible slice), and
+  the first shown row is stored in `App::queue_offset` for clicks.
   `queue_window_start` picks the first row: 0 until the current track nears
   the bottom, then scrolled to keep `rows / 3` (at most `MAX_LOOKAHEAD`, 5)
   upcoming tracks visible, and never past a full last page. Only **the rows
@@ -576,7 +611,10 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   source summary, hidden on a narrow screen), clicks, double-clicks (slow vs. quick) and
   seeking on the progress bar, the wheel, dragging
   both dividers and `<`/`>` (clamping, saved on
-  release, reloaded by a second `App`), media commands (each kind, including
+  release, reloaded by a second `App`), the focused queue (cursor following the current
+  track, jump, `J`/`K` with shuffle off and on, removal before the current
+  track and the refusal to remove it, clearing, the heavy border, click and
+  double-click), media commands (each kind, including
   no-ops like Play while playing), resuming (same source, queue, track,
   paused at the saved position and selected; a missing track dropped; nothing
   after a stop), and renders

@@ -252,7 +252,13 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
         KeyCode::End | KeyCode::Char('G') => app.select_last(),
         KeyCode::Enter | KeyCode::Char('l') => app.activate_selected(),
         KeyCode::Tab => app.toggle_focus(),
-        KeyCode::Backspace | KeyCode::Char('h') => app.focus_pane(Pane::Sidebar),
+        KeyCode::Char('h') => app.focus_left(),
+        KeyCode::Backspace => app.focus_pane(Pane::Sidebar),
+        KeyCode::Char('c') => {
+            if app.focus == Pane::Queue {
+                app.queue_clear_upcoming();
+            }
+        }
         KeyCode::Char('<') => app.resize_focused(-2),
         KeyCode::Char('>') => app.resize_focused(2),
         KeyCode::Char('/') => {
