@@ -215,7 +215,8 @@ foldly tells the system what's playing and listens to its playback controls:
 
 - **macOS:** the play/pause, next and previous keys on the keyboard, headphone buttons, and the
   Now Playing controls in Control Center (including scrubbing and shuffle) all control foldly,
-  and Control Center shows the song, artist, album and progress.
+  and Control Center shows the song, artist, album and progress. The volume keys keep controlling
+  the system volume; foldly's own volume (`+`/`-`) is separate, a volume just for foldly.
 - **Linux:** foldly appears as an MPRIS player called `foldly`, so desktop media widgets
   (GNOME, KDE, …), keyboard media keys handled by your desktop, and `playerctl` work with it,
   e.g. `playerctl -p foldly play-pause`. This needs a D-Bus session, which desktops have; without

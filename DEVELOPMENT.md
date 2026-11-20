@@ -42,8 +42,11 @@ truth for state — this file plus `git log` is all that is needed to resume.
   New in v0.3.0: obvious focus (one heavy border) and empty-list messages,
   double-click to play and click-to-seek (Q), `P` adds the playing song to a
   playlist (H), lengths in lists (L), resume where you left off (A).
-- Next: backlog item C (Artists and Albums in the sidebar). Since v0.3.0
-  (unreleased): media keys and Now Playing (B), not yet checked by hand.
+- State addendum: v0.4.0 adds media keys and Now Playing (B).
+- Decision (2026-11-20): foldly's volume stays separate from the system
+  volume. macOS volume keys never reach apps, and the user prefers an
+  app-level volume since macOS has no per-app mixer; don't try to link them.
+- Next: backlog item D (interactive queue pane), then C.
 - Dependency watch: souvlaki 0.9 pulls in `block` 0.1.6 on macOS, which
   cargo warns "will be rejected by a future version of Rust"; souvlaki has a
   1.0 rewrite in progress. If the warning becomes an error, move to 1.0 or
@@ -59,10 +62,10 @@ from its scope note alone, without re-deriving context.
       15 s; restored paused at the saved position. Real quit path checked by
       running the binary in a pty.
 - [x] **B. Media keys and OS Now Playing** — done 2026-11-20 (souvlaki,
-      `media.rs`; on macOS the app runs off the main thread). Commands are
-      tested by injecting them; the OS side needs a hand check: macOS media
-      keys and Control Center, and Linux MPRIS (`playerctl -p foldly
-      metadata`, `playerctl -p foldly play-pause`).
+      `media.rs`; on macOS the app runs off the main thread). Confirmed by
+      hand on macOS: media keys and Control Center work. Linux MPRIS is
+      still unchecked (`playerctl -p foldly metadata`, `playerctl -p foldly
+      play-pause`; part of item K).
 - [ ] **C. Artists and Albums in the sidebar** (medium). Add sidebar items
       for each artist and album (new `Location` variants, `SELECT DISTINCT`
       over tags), perhaps under collapsible "Artists" / "Albums" headings;
