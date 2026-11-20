@@ -61,7 +61,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("J K", "Move a track down / up in the playlist"),
         ],
     ),
-    ("General", &[("?", "This help"), ("q  Ctrl-C", "Quit")]),
+    ("General", &[("?", "This help"), ("Ctrl-L", "Redraw the screen"), ("q  Ctrl-C", "Quit")]),
 ];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -110,10 +110,17 @@ fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
 
-/// How many already-played tracks stay visible above the current one.
-const HISTORY_ROWS: usize = 2;
+/// Most upcoming tracks kept visible below the current one once the queue scrolls.
+const MAX_LOOKAHEAD: usize = 5;
 
-/// The play queue: recent history dimmed, the current track highlighted, then what's next.
+/// First queue row to show: from the top until the current track nears the bottom, then
+/// scrolled just enough to keep a few upcoming tracks in view, never past a full last page.
+pub fn queue_window_start(current: usize, len: usize, rows: usize) -> usize {
+    let lookahead = (rows / 3).min(MAX_LOOKAHEAD);
+    (current + lookahead + 1).saturating_sub(rows).min(len.saturating_sub(rows))
+}
+
+/// The play queue: played tracks dimmed, the current track highlighted, then what's next.
 fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
     let title = match app.queue_index {
         Some(i) => format!(" Queue {}/{} ", i + 1, app.queue.len()),
@@ -128,7 +135,7 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
 
     // Only build the rows that fit; a queue can hold the whole library.
     let rows = area.height.saturating_sub(2) as usize;
-    let start = current.saturating_sub(HISTORY_ROWS);
+    let start = queue_window_start(current, app.queue.len(), rows);
     let items: Vec<ListItem> = app.queue[start..(start + rows).min(app.queue.len())]
         .iter()
         .enumerate()
@@ -311,4 +318,26 @@ fn display_path(path: &std::path::Path) -> String {
         return if rest.as_os_str().is_empty() { "~".into() } else { format!("~/{}", rest.display()) };
     }
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::queue_window_start;
+
+    #[test]
+    fn queue_scrolls_only_when_needed() {
+        // 15 visible rows: lookahead 5. Nothing scrolls while current + 5 fits.
+        assert_eq!(queue_window_start(0, 100, 15), 0);
+        assert_eq!(queue_window_start(9, 100, 15), 0, "rows 10..14 still show what's next");
+        assert_eq!(queue_window_start(10, 100, 15), 1, "then scroll one row at a time");
+        assert_eq!(queue_window_start(50, 100, 15), 41);
+        // Near the end the last page stays full instead of leaving empty rows.
+        assert_eq!(queue_window_start(98, 100, 15), 85);
+        assert_eq!(queue_window_start(99, 100, 15), 85);
+        // A queue shorter than the panel never scrolls.
+        assert_eq!(queue_window_start(7, 8, 15), 0);
+        // Tiny panels still keep the current track visible.
+        assert_eq!(queue_window_start(5, 100, 1), 5);
+        assert_eq!(queue_window_start(5, 100, 0), 6);
+    }
 }

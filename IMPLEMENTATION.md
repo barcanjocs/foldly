@@ -309,6 +309,25 @@ blocks on the audio thread and pauses the player. Consequences:
   each new rodio player;
 - there is no gapless playback (backlog G would append to the same player).
 
+**Stream errors.** rodio's default error callback `eprintln!`s, which writes
+over the TUI; ratatui only repaints cells it changes, so the text lingered.
+`open_device` installs a callback that sends each `cpal::Error` to a channel
+instead, and `App::tick` calls `Player::handle_errors`:
+
+- `DeviceChanged` (cpal already rerouted a default-device stream), `Xrun` and
+  `RealtimeDenied` are ignored: the stream still works.
+- Anything else counts as a dead device. `reconnect` notes the current path,
+  position and paused state (unless the track had finished), reopens the
+  default device, and replays the track, seeking back and re-pausing. Players
+  belong to the old device's mixer, so they are dropped before the device.
+- Reconnects are throttled to one per `RECONNECT_INTERVAL` (2 s). If reopening
+  fails, or another error lands inside the interval, `broken` is set and the
+  next `play` reopens first.
+
+A handled error returns a message and sets `App::needs_full_redraw`, which
+makes the main loop `terminal.clear()` before drawing, wiping anything another
+library may have printed. `Ctrl-L` sets the same flag.
+
 ## Rendering (`ui.rs`)
 
 ### Layout
@@ -321,9 +340,12 @@ over a `Clear`.
   the location (`~`-shortened root at the top level); scan progress goes in a
   right-aligned top title. Rows: dimmed `../`, cyan `Folder/` with a dimmed
   count, `♪` green bold for the playing track, dimmed `(missing)` tracks.
-- **Queue** — titled `Queue i/n`. It shows `HISTORY_ROWS` (2) played tracks,
-  the current one, then upcoming tracks, and builds **only the rows that fit**:
-  the queue can be the whole library and draw runs 5×/sec.
+- **Queue** — titled `Queue i/n`; played tracks dimmed, the current one green.
+  `queue_window_start` picks the first row: 0 until the current track nears
+  the bottom, then scrolled to keep `rows / 3` (at most `MAX_LOOKAHEAD`, 5)
+  upcoming tracks visible, and never past a full last page. Only **the rows
+  that fit** are built: the queue can be the whole library and draw runs
+  5×/sec.
 - **Transport** — a `Gauge` whose bordered block's top title is the current
   song (title bold, `— artist` cyan, `· album` italic dimmed), so "now
   playing" costs no extra rows. The label shows state icon, time, volume,
@@ -353,13 +375,15 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
 - *watch.rs* — `is_relevant` rules on hand-built events, and a real watcher
   on a temp folder: a new audio file is reported and `take_settled` fires once,
   only after `SETTLE`.
+- *ui.rs* — `queue_window_start` scrolling rules.
 - *filter.rs* — word order, fuzzy abbreviations, accents, fzf operators,
   unranked order.
 - *app.rs* — `shuffled_from` (chosen first, same tracks once each), plus one
   **ignored end-to-end test** that needs an audio device and `FOLDLY_TEST_DIR`
   (three tagged tones, see DEVELOPMENT.md). It drives `App` directly through
   scanning, navigation, filtering, the picker, bulk add, reordering,
-  playback and auto-advance, shuffle on/off, every repeat mode, and renders
+  playback and auto-advance, shuffle on/off, every repeat mode, audio errors
+  injected with `Player::inject_error` (ignored vs. reconnect-and-resume), and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help
   popup at two heights. A second ignored test, `picks_up_music_added_while_running`,
   runs `App` on a temp copy of the fixtures and checks that a dropped file, an

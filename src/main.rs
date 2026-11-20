@@ -92,6 +92,9 @@ fn music_root(db_path: &std::path::Path) -> Result<PathBuf> {
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.should_quit {
         app.tick();
+        if std::mem::take(&mut app.needs_full_redraw) {
+            terminal.clear()?;
+        }
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         // Wake at least a few times a second so the progress bar moves.
@@ -106,8 +109,12 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) {
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        app.should_quit = true;
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('c') => app.should_quit = true,
+            KeyCode::Char('l') => app.needs_full_redraw = true,
+            _ => {}
+        }
         return;
     }
     // Any key press dismisses the last message.

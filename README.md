@@ -73,6 +73,7 @@ usual. Inside foldly, press `?` for every key.
 | `J` / `K` | Move a track down / up in a playlist |
 | `u` | Rescan now (changes are picked up automatically) |
 | `?` | Help: every key, explained |
+| `Ctrl-L` | Redraw the screen |
 | `q` | Quit |
 
 ### Virtual folders
@@ -131,8 +132,9 @@ To add everything by an artist to a playlist: `/`, `'artist name`, `Enter`, `A`.
 ### Queue, shuffle and repeat
 
 Playing a track queues the rest of the list it came from (the filtered list, if filtering). The
-right-hand panel shows the queue: the last two tracks played (dimmed), the current one (green),
-then what's next. The song playing is shown above the progress bar.
+right-hand panel shows the queue: tracks already played (dimmed), the current one (green), then
+what's next. It scrolls only once the current track nears the bottom, keeping a few upcoming
+tracks in view. The song playing is shown above the progress bar.
 
 - **Shuffle** (`z`): the chosen track plays first, then the rest in random order. Turning it on
   mid-song keeps the song playing and shuffles the rest; turning it off returns to the original
@@ -157,6 +159,13 @@ The bottom line shows the outcome of the last action (e.g. "added 3 tracks to Mi
 there)", or an error such as a file that couldn't be decoded), replacing the key hints until the
 next key press. If the music folder or database can't be opened, foldly prints the error to the
 terminal and exits.
+
+### Changing audio output
+
+Switching the system's output (to headphones, or a different speaker) is followed automatically.
+If the output device disappears, e.g. it's unplugged, foldly reconnects to the new default and
+carries on from the same spot, saying so on the bottom line. If the screen ever looks garbled,
+`Ctrl-L` redraws it.
 
 ## Data
 

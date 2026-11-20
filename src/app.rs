@@ -132,6 +132,9 @@ pub struct App {
     scan_rx: Option<Receiver<ScanEvent>>,
     /// Watches the music folder; `None` if watching couldn't start (`u` still rescans).
     watch: Option<Watch>,
+    /// Ask the main loop to repaint the whole screen, wiping anything another library may
+    /// have written over it.
+    pub needs_full_redraw: bool,
     pub should_quit: bool,
 }
 
@@ -161,6 +164,7 @@ impl App {
             scan_status: None,
             scan_rx: None,
             watch: None,
+            needs_full_redraw: false,
             should_quit: false,
         };
         match Watch::start(&app.root) {
@@ -588,6 +592,10 @@ impl App {
     /// Called every loop iteration: advances when a track ends, rescans once folder changes
     /// settle, and picks up scan progress.
     pub fn tick(&mut self) {
+        if let Some(message) = self.player.handle_errors() {
+            self.message = Some(message);
+            self.needs_full_redraw = true;
+        }
         self.poll_watch();
         if self.player.finished() {
             match (self.repeat, self.queue_index) {
@@ -901,6 +909,29 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
         terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         println!("{}", terminal.backend());
+
+        // Audio errors: a rerouted stream is ignored; a dead device is reopened and the track
+        // resumes at the same position, paused if it was paused.
+        app.play_index(1);
+        app.player.seek_by(1);
+        std::thread::sleep(Duration::from_millis(200));
+        app.message = None;
+        app.player.inject_error(rodio::cpal::ErrorKind::DeviceChanged);
+        app.tick();
+        assert!(app.message.is_none() && !app.needs_full_redraw);
+        let (index, before) = (app.queue_index, app.player.position());
+        app.player.toggle_pause();
+        app.player.inject_error(rodio::cpal::ErrorKind::DeviceNotAvailable);
+        app.tick();
+        assert_eq!(app.message.as_deref(), Some("audio output changed; reconnected to the default device"));
+        assert!(app.needs_full_redraw);
+        assert_eq!(app.queue_index, index, "same track");
+        assert!(app.player.is_paused(), "still paused");
+        let after = app.player.position();
+        assert!(after + Duration::from_millis(300) >= before, "resumed at {after:?}, was {before:?}");
+        app.player.toggle_pause();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(app.player.position() > after, "playing again on the new device");
 
         // Help fits a normal terminal; on a short one it scrolls, stopping at the last line.
         app.mode = Mode::Help { scroll: 0 };

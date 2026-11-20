@@ -26,9 +26,12 @@ truth for state — this file plus `git log` is all that is needed to resume.
   shown, remove, reorder, rename, delete), fuzzy filter (nucleo), shuffle,
   repeat, queue panel, `?` help, one-line install from GitHub releases built
   by `.github/workflows/release.yml`. Since v0.1.0: the music folder is
-  watched (notify) and rescanned automatically once changes settle (item I).
-  Tree green, 9 tests + 2 ignored end-to-end tests (need audio; see
-  *Verification*). Docs split into README
+  watched (notify) and rescanned automatically once changes settle (item I);
+  audio stream errors no longer print over the TUI, and a lost output device
+  is reopened with the track resumed; `Ctrl-L` redraws; the queue panel
+  scrolls only when needed. Tree green, 10 tests + 2 ignored end-to-end tests
+  (need audio; see *Verification*). Reconnecting is tested by injecting
+  errors, not by a real device switch. Docs split into README
   (users), this file (state), IMPLEMENTATION.md (internals).
 - Next: backlog item A (resume last session).
 - Blockers / open questions: never run on a real Linux desktop (item K).
@@ -85,8 +88,10 @@ from its scope note alone, without re-deriving context.
       changes and relative paths no longer line up.
 - [ ] **K. Linux desktop check** (small). CI builds and runs the tests on
       Linux, but no one has played audio there. Try it under PipeWire and
-      plain ALSA; if ALSA's stderr warnings garble the screen, redirect
-      stderr while the TUI is up.
+      plain ALSA, including unplugging the output device. rodio's errors are
+      captured, but ALSA's C library can still print to stderr; `Ctrl-L`
+      repairs the screen. If it happens often, redirect stderr (fd 2) to a
+      log file while the TUI is up.
 - [ ] **L. Track durations in lists** (tiny). Right-align `mm:ss` in the
       browser and queue rows; durations are already in `Track::duration`.
 - [ ] **M. Cover art** (medium). Show embedded art (lofty) or `cover.jpg` in a
