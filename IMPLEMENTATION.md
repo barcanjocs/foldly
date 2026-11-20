@@ -631,33 +631,26 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   current track until moved, removal (index bookkeeping, refusing the current
   track), moves with shuffle off and on, clearing upcoming, key encoding, and
   `restore` dropping lost tracks.
-- *app.rs* — one
-  **ignored end-to-end test** that needs an audio device and `FOLDLY_TEST_DIR`
-  (three tagged tones, see DEVELOPMENT.md). It drives `App` directly through
-  scanning, sidebar previews and focus, filtering, the picker, bulk add,
-  reordering, rename, creating and deleting playlists from the sidebar,
-  playback and auto-advance, shuffle on/off, every repeat mode, audio errors
-  injected with `Player::inject_error` (ignored vs. reconnect-and-resume),
-  focus visibility (exactly one heavy border, on the focused pane, including
-  an empty one) and the empty-list messages, the info pane (track details, "also in" excluding the shown playlist, the
-  source summary, hidden on a narrow screen), clicks, double-clicks (slow vs. quick) and
-  seeking on the progress bar, the wheel, dragging
-  both dividers and `<`/`>` (clamping, saved on
-  release, reloaded by a second `App`), the focused queue (cursor following the current
-  track, jump, `J`/`K` with shuffle off and on, removal before the current
-  track and the refusal to remove it, clearing, the heavy border, click and
-  double-click), media commands (each kind, including
-  no-ops like Play while playing), resuming (same source, queue, track,
-  paused at the saved position and selected; a missing track dropped; nothing
-  after a stop), and renders
-  frames to a `TestBackend` (printed with `--nocapture`), including the help
-  popup at two heights. A second ignored test, `picks_up_music_added_while_running`,
-  runs `App` on a temp copy of the fixtures and checks that a dropped file, an
-  album folder moved in, and a deleted file are all picked up without `u`.
+- *src/app/tests.rs* — **ignored end-to-end tests** that need an audio
+  device and `FOLDLY_TEST_DIR` (three tagged tones, see DEVELOPMENT.md). Each
+  drives a real `App` through one area: browsing, filtering and editing
+  playlists; the info pane; playback, shuffle and repeat; audio errors
+  (injected with `Player::inject_error`); mouse clicks, seeking, scrubbing and
+  resizing; media commands; the queue pane; resuming; the help popup; and
+  picking up files added while running (on a temp copy of the fixtures).
+  Frames are rendered to a `TestBackend` and printed with `--nocapture`.
+
+`Harness` gives each test a scanned `App` on its own throwaway database
+(`foldly-e2e-<name>-<pid>.db`, removed on drop) and derefs to it;
+`Harness::with_mix` adds a playlist "Mix" of Tone 1, Tone 3, Tone 2 straight
+through `db`, so tests start from a known state in milliseconds instead of
+replaying UI steps. `reopen` builds a second `App` on the same database, as
+the next run would. Because every test has its own database they run in
+parallel (about seven seconds), and none depends on another's leftovers.
 
 Temp paths are `std::env::temp_dir()/foldly-<test>-<pid>` so parallel tests
 don't collide. CI (`release.yml`) runs `cargo test` on every target it can
-execute; the ignored test only runs locally.
+execute; the ignored tests only run locally.
 
 ## Design decisions, in brief
 

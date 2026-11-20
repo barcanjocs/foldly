@@ -156,7 +156,11 @@ from its scope note alone, without re-deriving context.
   `HELP` table and status hints (ui.rs), and README's key table.
 - **Tests:** temp paths use a `foldly-` prefix plus a per-test name and the
   pid, so parallel tests don't share files. Tests needing an audio device or
-  fixtures are `#[ignore]` and read `FOLDLY_TEST_DIR`.
+  fixtures are `#[ignore]` and read `FOLDLY_TEST_DIR`. Put rules in a module
+  that can be unit-tested without audio (like queue.rs) and keep end-to-end
+  tests for how the pieces fit; a new end-to-end test gets its own
+  `Harness` and sets up its state directly (`with_mix`), never relying on
+  another test.
 - **Commits:** small, lowercase imperative, one concern each; keep the
   worktree clean so `git diff` always shows exactly the current task.
 - User-facing docs (keys, behaviour, data model, backup) live in README.md —
@@ -168,7 +172,7 @@ from its scope note alone, without re-deriving context.
 ./check   # fmt --check, clippy -D warnings, build, test — must be green before committing
 ```
 
-The end-to-end tests play real audio, so it needs an audio device and a
+The end-to-end tests (src/app/tests.rs) play real audio, so they need an audio device and a
 folder of three short tagged MP3s named `tone1.mp3`..`tone3.mp3` (titles
 "Tone 1" to "Tone 3", artist "Test Artist", year 1997, genre "Test Genre"). Run them after touching
 playback, the queue, scanning, watching or the UI:
@@ -202,9 +206,12 @@ Requires Rust stable (edition 2024). Linux needs `libasound2-dev`.
 - `src/main.rs` — entry point: `--help`/`--version`, music root resolution,
   audio + db open, 200 ms event loop, key dispatch per `Mode`
   (`handle_key`, `handle_normal_key`).
-- `src/app.rs` — `App` state: `Location` / `Entry` (virtual folders),
-  `Mode` (prompts), listing and filtering, playlist actions, queue,
-  shuffle, repeat, scan polling. Unit + end-to-end tests at the bottom.
+- `src/app.rs` — `App` state: `Location` (sidebar sources), `Pane`
+  (focus), `Mode` (prompts), listing and filtering, playlist actions,
+  playback over the queue, shuffle, repeat, mouse, session, media
+  commands, scan polling.
+- `src/app/tests.rs` — the end-to-end tests (ignored; need audio and
+  fixtures), one per area, on a shared `Harness`.
 - `src/db.rs` — schema and every query (tracks, playlists, settings).
   Unit tests at the bottom.
 - `src/scan.rs` — background scanner thread and tag reading (lofty).
