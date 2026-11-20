@@ -129,8 +129,6 @@ from its scope note alone, without re-deriving context.
     with nothing selected rows end one column short of the border.
   - Progress events trigger a full `reload` of the current list every 200
     files; fine so far, but rebuilds every filter haystack each time.
-  - The `HELP` table in ui.rs is maintained by hand alongside
-    `handle_normal_key`; a test could check every bound key appears.
 
 ## Conventions (don't drift)
 
@@ -152,8 +150,10 @@ from its scope note alone, without re-deriving context.
   original list order. Change the queue only through `Queue` methods
   (queue.rs), which keep both orders in step; add a unit test there for any
   new operation.
-- **Keys:** a new key needs an entry in `handle_normal_key` (main.rs), the
-  `HELP` table and status hints (ui.rs), and README's key table.
+- **Keys:** a new normal-mode key is an `Action` in keys.rs, bound in
+  `BINDINGS`, described in a `HELP` row (a test fails otherwise), and
+  performed in `perform` (main.rs; the compiler insists). Also update the
+  status hints (ui.rs) and README's key table, which are written by hand.
 - **Tests:** temp paths use a `foldly-` prefix plus a per-test name and the
   pid, so parallel tests don't share files. Tests needing an audio device or
   fixtures are `#[ignore]` and read `FOLDLY_TEST_DIR`. Put rules in a module
@@ -205,7 +205,10 @@ Requires Rust stable (edition 2024). Linux needs `libasound2-dev`.
   rendering, testing. Keep in sync when architecture changes.
 - `src/main.rs` — entry point: `--help`/`--version`, music root resolution,
   audio + db open, 200 ms event loop, key dispatch per `Mode`
-  (`handle_key`, `handle_normal_key`).
+  (`handle_key`), and `perform`, which does each `Action`.
+- `src/keys.rs` — every normal-mode key: `Action`, `BINDINGS` (keys →
+  action) and `HELP` (the help popup's sections, labelled from the
+  bindings). Unit tests at the bottom.
 - `src/app.rs` — `App` state: `Location` (sidebar sources), `Pane`
   (focus), `Mode` (prompts), listing and filtering, playlist actions,
   playback over the queue, shuffle, repeat, mouse, session, media
@@ -224,8 +227,8 @@ Requires Rust stable (edition 2024). Linux needs `libasound2-dev`.
 - `src/media.rs` — media keys and Now Playing (souvlaki): command channel,
   change-only publishing.
 - `src/player.rs` — audio output: one rodio `Player` per track.
-- `src/ui.rs` — all drawing: sidebar, songs, queue, transport, status line, popups,
-  and the `HELP` key table.
+- `src/ui.rs` — all drawing: sidebar, songs, queue, transport, status line,
+  popups (the help popup's content comes from keys.rs).
 - `install.sh` — the curl installer (POSIX sh).
 - `.github/workflows/release.yml` — release builds on `v*` tags.
 - `check` — the verification script.

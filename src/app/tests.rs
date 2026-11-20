@@ -665,3 +665,37 @@ fn picks_up_music_added_while_running() {
     drop(h);
     std::fs::remove_dir_all(&base).unwrap();
 }
+
+#[test]
+#[ignore]
+fn key_presses_go_through_the_key_table() {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut h = Harness::with_mix("keys");
+    let press = |h: &mut Harness, code: KeyCode| crate::handle_key(h, KeyEvent::new(code, KeyModifiers::NONE));
+    let typed = |h: &mut Harness, text: &str| text.chars().for_each(|c| press(h, KeyCode::Char(c)));
+
+    // Filter, Enter plays the top match; Space pauses; Tab cycles focus; ? opens help, which any
+    // other key closes; Esc clears a filter; Ctrl-L asks for a redraw; q quits.
+    press(&mut h, KeyCode::Char('/'));
+    typed(&mut h, "tone 2");
+    press(&mut h, KeyCode::Enter);
+    assert_eq!(playing(&h).as_deref(), Some("Tone 2"));
+    press(&mut h, KeyCode::Char(' '));
+    assert!(h.player.is_paused());
+    press(&mut h, KeyCode::Tab);
+    assert_eq!(h.focus, Pane::Queue);
+    press(&mut h, KeyCode::Char('h'));
+    assert_eq!(h.focus, Pane::Songs);
+    press(&mut h, KeyCode::Char('?'));
+    assert!(matches!(h.mode, Mode::Help { .. }));
+    press(&mut h, KeyCode::Char('x'));
+    assert!(matches!(h.mode, Mode::Normal));
+    press(&mut h, KeyCode::Esc);
+    assert!(h.filter.is_empty());
+    press(&mut h, KeyCode::Char('+'));
+    assert_eq!(h.player.volume(), 1.05);
+    crate::handle_key(&mut h, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+    assert!(h.needs_full_redraw);
+    press(&mut h, KeyCode::Char('q'));
+    assert!(h.should_quit);
+}

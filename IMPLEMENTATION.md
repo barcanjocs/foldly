@@ -43,8 +43,16 @@ the column rects in `App::panes` for the mouse).
 - **`main.rs`** — handles `--help`/`--version` before anything else, resolves
   the music root (CLI argument, saved to `settings`, else the saved one), opens
   the audio device *before* entering the TUI so those errors print normally,
-  then runs the loop. Key dispatch lives here: `handle_key` routes by `Mode`,
-  `handle_normal_key` holds the browsing/playback/playlist bindings.
+  then runs the loop. `handle_key` routes by `Mode`; in normal mode keys go
+  through `keys::action_for` to `perform`, an exhaustive `match` on `Action`.
+- **`keys.rs`** — the key table. `BINDINGS` maps each `Action` to its keys
+  (Ctrl keys work in every mode, the rest in normal mode); `HELP` lists the
+  help popup's sections as rows of actions (or notes, for examples and the
+  mouse), labelled from `BINDINGS` by `label`. An action can appear in
+  several sections with wording for that pane. Three things keep it honest:
+  `perform` must handle every `Action` (the compiler), every `Action` must be
+  constructed somewhere, i.e. bound (`-D warnings` dead-code), and a test
+  checks every bound action is documented and no key is bound twice.
 - **`app.rs`** — `App` and its types: `Location`, `Entry`, `Mode`,
   `InputPurpose`, `Repeat`. Listing, filtering, navigation, playlist actions,
   prompts, queue, shuffle, repeat and scan polling. Tests at the bottom.
@@ -64,7 +72,8 @@ the column rects in `App::panes` for the mouse).
   commands arrive on, and change-only publishing of what's playing.
 - **`player.rs`** — `Player` wraps rodio: the device sink plus at most one
   playing rodio `Player`.
-- **`ui.rs`** — every draw function, the `HELP` key table, colours (`ACCENT`).
+- **`ui.rs`** — every draw function and colours (`ACCENT`); `draw_help`
+  renders `keys::HELP`.
 
 ## Data layer (`db.rs`)
 
@@ -671,4 +680,4 @@ execute; the ignored tests only run locally.
 
 Tracked in DEVELOPMENT.md's backlog: decode-skip messages being cleared, the
 repeat-all reshuffle possibly repeating the last track, duplicate `♪` markers,
-per-batch reloads during scans, and the hand-maintained `HELP` table.
+and per-batch reloads during scans.

@@ -4,6 +4,7 @@
 mod app;
 mod db;
 mod filter;
+mod keys;
 mod media;
 mod player;
 mod queue;
@@ -24,6 +25,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 
 use app::{App, Mode, Pane};
+use keys::Action;
 use player::Player;
 
 const ROOT_SETTING: &str = "music_root";
@@ -153,11 +155,10 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) {
+    // Ctrl keys (quit, redraw) work everywhere, even in prompts and popups.
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        match key.code {
-            KeyCode::Char('c') => app.should_quit = true,
-            KeyCode::Char('l') => app.needs_full_redraw = true,
-            _ => {}
+        if let Some(action) = keys::action_for(key.code, key.modifiers) {
+            perform(app, action);
         }
         return;
     }
@@ -240,54 +241,62 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
 }
 
 fn handle_normal_key(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Char('?') => app.mode = Mode::Help { scroll: 0 },
-        KeyCode::Esc if !app.filter.is_empty() => app.set_filter(String::new()),
+    if let Some(action) = keys::action_for(code, KeyModifiers::NONE) {
+        perform(app, action);
+    }
+}
 
-        KeyCode::Down | KeyCode::Char('j') => app.move_selection(1),
-        KeyCode::Up | KeyCode::Char('k') => app.move_selection(-1),
-        KeyCode::PageDown => app.move_selection(10),
-        KeyCode::PageUp => app.move_selection(-10),
-        KeyCode::Home | KeyCode::Char('g') => app.select_first(),
-        KeyCode::End | KeyCode::Char('G') => app.select_last(),
-        KeyCode::Enter | KeyCode::Char('l') => app.activate_selected(),
-        KeyCode::Tab => app.toggle_focus(),
-        KeyCode::Char('h') => app.focus_left(),
-        KeyCode::Backspace => app.focus_pane(Pane::Sidebar),
-        KeyCode::Char('c') => {
-            if app.focus == Pane::Queue {
-                app.queue_clear_upcoming();
-            }
-        }
-        KeyCode::Char('<') => app.resize_focused(-2),
-        KeyCode::Char('>') => app.resize_focused(2),
-        KeyCode::Char('/') => {
+/// What each key does; which key is which lives in keys.rs.
+fn perform(app: &mut App, action: Action) {
+    match action {
+        Action::Quit => app.should_quit = true,
+        Action::Redraw => app.needs_full_redraw = true,
+        Action::Help => app.mode = Mode::Help { scroll: 0 },
+        Action::Down => app.move_selection(1),
+        Action::Up => app.move_selection(-1),
+        Action::PageDown => app.move_selection(10),
+        Action::PageUp => app.move_selection(-10),
+        Action::First => app.select_first(),
+        Action::Last => app.select_last(),
+        Action::Activate => app.activate_selected(),
+        Action::NextPane => app.toggle_focus(),
+        Action::PaneLeft => app.focus_left(),
+        Action::ToSidebar => app.focus_pane(Pane::Sidebar),
+        Action::DividerLeft => app.resize_focused(-2),
+        Action::DividerRight => app.resize_focused(2),
+        Action::Rescan => app.rescan(),
+        Action::Filter => {
             // The filter always works on the songs list.
             app.focus_pane(Pane::Songs);
             app.mode = Mode::Filter;
         }
-
-        KeyCode::Char(' ') => app.player.toggle_pause(),
-        KeyCode::Char('n') => app.next(),
-        KeyCode::Char('p') => app.previous(),
-        KeyCode::Char('s') => app.stop(),
-        KeyCode::Char('z') => app.toggle_shuffle(),
-        KeyCode::Right => app.player.seek_by(5),
-        KeyCode::Left => app.player.seek_by(-5),
-        KeyCode::Char('+') | KeyCode::Char('=') => app.change_volume(0.05),
-        KeyCode::Char('-') => app.change_volume(-0.05),
-
-        KeyCode::Char('a') => app.start_add_to_playlist(),
-        KeyCode::Char('A') => app.start_add_all_to_playlist(),
-        KeyCode::Char('P') => app.start_add_playing_to_playlist(),
-        KeyCode::Char('N') => app.start_new_playlist(),
-        KeyCode::Char('R') => app.start_rename(),
-        KeyCode::Char('d') => app.delete_selected(),
-        KeyCode::Char('K') => app.move_entry(-1),
-        KeyCode::Char('J') => app.move_entry(1),
-        KeyCode::Char('r') => app.cycle_repeat(),
-        KeyCode::Char('u') => app.rescan(),
-        _ => {}
+        Action::ClearFilter => {
+            if !app.filter.is_empty() {
+                app.set_filter(String::new());
+            }
+        }
+        Action::PlayPause => app.player.toggle_pause(),
+        Action::Next => app.next(),
+        Action::Previous => app.previous(),
+        Action::SeekBack => app.player.seek_by(-5),
+        Action::SeekForward => app.player.seek_by(5),
+        Action::VolumeUp => app.change_volume(0.05),
+        Action::VolumeDown => app.change_volume(-0.05),
+        Action::Shuffle => app.toggle_shuffle(),
+        Action::Repeat => app.cycle_repeat(),
+        Action::Stop => app.stop(),
+        Action::AddToPlaylist => app.start_add_to_playlist(),
+        Action::AddAllToPlaylist => app.start_add_all_to_playlist(),
+        Action::AddPlayingToPlaylist => app.start_add_playing_to_playlist(),
+        Action::NewPlaylist => app.start_new_playlist(),
+        Action::Rename => app.start_rename(),
+        Action::Delete => app.delete_selected(),
+        Action::MoveDown => app.move_entry(1),
+        Action::MoveUp => app.move_entry(-1),
+        Action::ClearUpcoming => {
+            if app.focus == Pane::Queue {
+                app.queue_clear_upcoming();
+            }
+        }
     }
 }

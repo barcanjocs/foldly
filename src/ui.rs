@@ -12,75 +12,9 @@ use ratatui::widgets::{Block, BorderType, Clear, Gauge, List, ListItem, ListStat
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, Details, InputPurpose, Location, Mode, Pane, PaneRects, Repeat, location_name};
+use crate::keys;
 
 const ACCENT: Color = Color::Cyan;
-
-/// Every key, grouped, for the `?` help popup. Keep in step with `handle_key` in main.rs.
-const HELP: &[(&str, &[(&str, &str)])] = &[
-    (
-        "Browsing",
-        &[
-            ("↑ ↓  j k", "Move the selection in the focused pane"),
-            ("PgUp PgDn", "Move 10 at a time"),
-            ("g G  Home End", "Jump to the top / bottom"),
-            ("Tab", "Focus the next pane: sidebar → songs → queue"),
-            ("Enter  l", "Sidebar: go to its songs. Songs: play, queue the rest"),
-            ("h", "Focus the pane to the left"),
-            ("Backspace", "Back to the sidebar"),
-            ("< >", "Move the divider right of the focused pane"),
-            ("Mouse", "Click selects, double-click plays, the wheel scrolls"),
-            ("", "Drag a divider to resize; click or drag the bar to seek"),
-            ("u", "Rescan now (changes are picked up automatically)"),
-        ],
-    ),
-    (
-        "Filter",
-        &[
-            ("/", "Filter the list as you type; Enter plays the top match"),
-            ("Esc", "Clear the filter"),
-            ("android radio", "Words match in any order"),
-            ("rhpar", "Letters match fuzzily (Radiohead — Paranoid Android)"),
-            ("'word", "Exact match"),
-            ("^word  word$", "Starts with / ends with"),
-            ("!word", "Exclude matches"),
-        ],
-    ),
-    (
-        "Playback",
-        &[
-            ("Space", "Pause / resume"),
-            ("n  p", "Next / previous (previous restarts the track after 3s)"),
-            ("← →", "Seek 5 seconds"),
-            ("+ -", "Volume"),
-            ("z", "Shuffle on / off (the current track keeps playing)"),
-            ("r", "Repeat: off → all (restart the queue) → one (loop this track)"),
-            ("s", "Stop"),
-        ],
-    ),
-    (
-        "Queue (when focused)",
-        &[
-            ("Enter  l", "Jump to the selected song"),
-            ("d", "Remove it from the queue (n skips the one playing)"),
-            ("J K", "Play it later / earlier"),
-            ("c", "Clear everything after the current song"),
-            ("a  A", "Add it / the whole queue to a playlist"),
-        ],
-    ),
-    (
-        "Playlists",
-        &[
-            ("a", "Add the selected track to a playlist"),
-            ("A", "Add all tracks shown to a playlist (skips duplicates)"),
-            ("P", "Add the song that's playing to a playlist"),
-            ("N", "New playlist"),
-            ("R", "Rename the playlist being shown"),
-            ("d", "Songs: remove from playlist. Sidebar: delete playlist"),
-            ("J K", "Move a track down / up in the playlist"),
-        ],
-    ),
-    ("General", &[("?", "This help"), ("Ctrl-L", "Redraw the screen"), ("q  Ctrl-C", "Quit")]),
-];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, transport, status] =
@@ -552,13 +486,17 @@ fn draw_popup(frame: &mut Frame, app: &mut App) {
 fn draw_help(frame: &mut Frame, scroll: &mut u16) {
     const KEY_WIDTH: usize = 15;
     let mut lines = Vec::new();
-    for (i, (section, keys)) in HELP.iter().enumerate() {
+    for (i, section) in keys::HELP.iter().enumerate() {
         if i > 0 {
             lines.push(Line::default());
         }
-        lines.push(Line::from(*section).bold().fg(ACCENT));
-        for (key, action) in keys.iter() {
-            lines.push(Line::from(vec![Span::raw(format!("  {key:<KEY_WIDTH$}")).bold(), Span::raw(*action)]));
+        lines.push(Line::from(section.title).bold().fg(ACCENT));
+        for row in section.rows {
+            let (keys, text) = match row {
+                keys::Row::Keys(actions, text) => (keys::label(actions), *text),
+                keys::Row::Note(keys, text) => (keys.to_string(), *text),
+            };
+            lines.push(Line::from(vec![Span::raw(format!("  {keys:<KEY_WIDTH$}")).bold(), Span::raw(text)]));
         }
     }
 
