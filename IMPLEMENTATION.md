@@ -77,7 +77,9 @@ Four tables; see README.md for the full DDL.
   own. Order is `position`, then `id`. Both foreign keys cascade
   (`PRAGMA foreign_keys` is on).
 - `settings` — key/value: `music_root`, `shuffle` (`"1"`/`"0"`), `repeat`
-  (`off`/`all`/`one`), `sidebar_width` and `right_width` (percent).
+  (`off`/`all`/`one`), `sidebar_width` and `right_width` (percent), and the
+  saved session (`session_location`, `session_queue`, `session_unshuffled`,
+  `session_index`, `session_position_ms`; see "Resuming").
 
 ### Migrations
 
@@ -339,6 +341,28 @@ queue_index: position in `queue` of the current track
 
 The queue is a snapshot: editing a playlist doesn't change what's queued.
 
+### Resuming
+
+`App::save_session` writes, in one transaction: `session_location` (`all` or
+`playlist:<id>`), and, if a track is loaded, `session_index`,
+`session_position_ms`, and the queue in play and original order as
+`encode_keys` strings (`id` or `id:entry`, comma-separated). The queue can be
+the whole library, so it's only rewritten when its encoding differs from
+`saved_queue`, the last one written; comparing every save is cheaper than
+tracking every place the queue changes. With nothing loaded (stopped), the
+queue keys are deleted. It runs from `main.rs` after the loop ends (errors
+printed after the terminal is restored) and from `tick` every
+`SESSION_SAVE_INTERVAL` (15 s) while a track is loaded, so a closed terminal
+or a crash loses little.
+
+`restore_session`, at the end of `App::new` (before the first rescan), shows
+the saved source (All Tracks if the playlist is gone), rebuilds `queue` and
+`unshuffled` from `db::tracks_by_id` (every track, present or missing),
+dropping keys whose track is gone or missing and restoring entry ids, then
+finds the saved current track by key in the rebuilt queue. If it's there, it
+is loaded with `Player::load_paused` at the saved position and selected in
+the songs list; if not, the queue is kept with nothing loaded.
+
 ## Playback (`player.rs`)
 
 `Player::new` opens the default output device and keeps the `MixerDeviceSink`
@@ -360,7 +384,12 @@ blocks on the audio thread and pauses the player. Consequences:
   `Decoder::try_from(File)` records the byte length);
 - volume lives in `Player.volume` (0.0–1.5, default 0.8) and is applied to
   each new rodio player;
-- there is no gapless playback (backlog G would append to the same player).
+- there is no gapless playback (backlog G would append to the same player);
+- `load_paused` (resuming a session) and `reconnect` of a paused track go
+  through `start(path, paused: true)`, which pauses the new rodio player
+  *before* appending the source, so not a sample is heard; the following
+  `try_seek` is still applied, because rodio handles seeks in the source's
+  periodic callback, which keeps running while paused.
 
 **Stream errors.** rodio's default error callback `eprintln!`s, which writes
 over the TUI; ratatui only repaints cells it changes, so the text lingered.
@@ -500,7 +529,8 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   only after `SETTLE`.
 - *filter.rs* — word order, fuzzy abbreviations, accents, fzf operators,
   unranked order.
-- *app.rs* — `shuffled_from` (chosen first, same tracks once each), plus one
+- *app.rs* — `shuffled_from` (chosen first, same tracks once each),
+  `encode_keys`/`decode_keys` (round trip, malformed keys skipped), plus one
   **ignored end-to-end test** that needs an audio device and `FOLDLY_TEST_DIR`
   (three tagged tones, see DEVELOPMENT.md). It drives `App` directly through
   scanning, sidebar previews and focus, filtering, the picker, bulk add,
@@ -512,7 +542,9 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   source summary, hidden on a narrow screen), clicks, double-clicks (slow vs. quick) and
   seeking on the progress bar, the wheel, dragging
   both dividers and `<`/`>` (clamping, saved on
-  release, reloaded by a second `App`), and renders
+  release, reloaded by a second `App`), resuming (same source, queue, track,
+  paused at the saved position and selected; a missing track dropped; nothing
+  after a stop), and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help
   popup at two heights. A second ignored test, `picks_up_music_added_while_running`,
   runs `App` on a temp copy of the fixtures and checks that a dropped file, an

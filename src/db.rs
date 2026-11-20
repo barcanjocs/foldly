@@ -208,6 +208,19 @@ pub fn all_tracks(conn: &Connection) -> Result<Vec<Track>> {
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+/// Every track, present or missing, by id (for rebuilding a saved queue).
+pub fn tracks_by_id(conn: &Connection) -> Result<std::collections::HashMap<i64, Track>> {
+    let sql = format!("SELECT {TRACK_COLUMNS} FROM tracks t");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |r| track_from_row(r, None))?;
+    rows.map(|row| row.map(|t| (t.id, t))).collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+pub fn delete_setting(conn: &Connection, key: &str) -> Result<()> {
+    conn.execute("DELETE FROM settings WHERE key = ?1", [key])?;
+    Ok(())
+}
+
 pub fn track_details(conn: &Connection, track_id: i64) -> Result<Option<TrackDetails>> {
     Ok(conn
         .query_row(

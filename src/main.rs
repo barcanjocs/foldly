@@ -73,8 +73,12 @@ fn main() -> Result<()> {
         restore_hook(info);
     }));
     let result = run(&mut terminal, &mut app);
+    let saved = app.save_session();
     let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
+    if let Err(err) = saved {
+        eprintln!("foldly: couldn't save where you left off: {err:#}");
+    }
     result
 }
 

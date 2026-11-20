@@ -156,6 +156,15 @@ to narrow loose results, use fzf's operators:
 
 To add everything by an artist to a playlist: `/`, `'artist name`, `Enter`, `A`.
 
+### Picking up where you left off
+
+When you quit, foldly remembers the playlist you were looking at, the queue and the song that was
+playing, and where in it. Next time it starts there, with the song selected and loaded paused at
+the same spot: press `Space` to carry on. This is also saved every 15 seconds while something is
+loaded, so closing the terminal window loses at most that much. Songs whose files have gone
+missing since are left out of the queue. If you stopped playback (`s`) before quitting, foldly
+starts with an empty queue.
+
 ### Queue, shuffle and repeat
 
 Playing a track queues the rest of the list it came from (the filtered list, if filtering). The
@@ -246,7 +255,7 @@ CREATE TABLE playlist_tracks (
 );
 
 CREATE TABLE settings (
-    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat, sidebar_width, right_width
+    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat, sidebar_width, right_width, session_*
     value TEXT NOT NULL
 );
 ```

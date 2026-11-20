@@ -39,7 +39,10 @@ truth for state — this file plus `git log` is all that is needed to resume.
   the audio output while playing (no error on screen, playback follows).
   Not yet tried by hand: unplugging the playing device, i.e. the
   reconnect-and-resume path (tested only by injecting errors).
-- Next: backlog item A (resume last session).
+- Next: backlog item C (Artists and Albums in the sidebar) or B (media
+  keys and OS Now Playing). Done since v0.2.0 (unreleased): focus
+  visibility, empty-list messages, double-click/seek clicks (Q), `P` (H),
+  lengths in lists (L), resume (A).
 - Blockers / open questions: never run on a real Linux desktop (item K).
 
 ## Backlog
@@ -47,13 +50,9 @@ truth for state — this file plus `git log` is all that is needed to resume.
 Ranked by value-per-effort as of 2026-11-20. Each item should be startable
 from its scope note alone, without re-deriving context.
 
-- [ ] **A. Resume last session** (small). On quit, nothing is remembered but
-      the music folder, shuffle and repeat. Save the location, the queue
-      (track ids + entry ids in play order, plus `unshuffled`), the queue
-      index and the playback position in `settings` (JSON or a small
-      `session` table). On start, restore the location and queue paused at
-      that position; `Space` resumes. Drop entries whose track is missing.
-      Touches: `App::new`, a save on quit in `main.rs::run`, db helpers.
+- [x] **A. Resume last session** — done 2026-11-20: saved on quit and every
+      15 s; restored paused at the saved position. Real quit path checked by
+      running the binary in a pty.
 - [ ] **B. Media keys and OS Now Playing** (medium). Use `souvlaki` (MPRIS on
       Linux, MPNowPlayingInfoCenter on macOS) to publish title/artist/album/
       duration/position and receive play/pause/next/previous/seek. Events

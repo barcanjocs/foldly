@@ -210,6 +210,10 @@ pub struct App {
     dragging: Option<Divider>,
     /// The last row clicked and when, to spot a double-click.
     last_click: Option<(Instant, Pane, usize)>,
+    /// When the session was last saved, and the queue as last written (it can be the whole
+    /// library, so it's only rewritten when it changes).
+    session_saved_at: Instant,
+    saved_queue: Option<(String, String)>,
     pub should_quit: bool,
 }
 
@@ -250,6 +254,8 @@ impl App {
             panes: PaneRects::default(),
             dragging: None,
             last_click: None,
+            session_saved_at: Instant::now(),
+            saved_queue: None,
             should_quit: false,
         };
         match Watch::start(&app.root) {
@@ -266,6 +272,7 @@ impl App {
         app.clamp_widths(Divider::SongsRight);
         app.reload()?;
         app.select(0);
+        app.restore_session()?;
         app.rescan();
         Ok(app)
     }
@@ -846,6 +853,11 @@ impl App {
         }
         self.poll_scan();
         self.refresh_details();
+        // Saved now and then too, so closing the terminal or a crash loses little.
+        if self.player.is_active() && self.session_saved_at.elapsed() >= SESSION_SAVE_INTERVAL {
+            let result = self.save_session();
+            self.report(result);
+        }
     }
 
     /// Recomputes the info pane when the selection, focus or source changed since last time.
@@ -889,6 +901,94 @@ impl App {
             unknown: self.tracks.len() - known.len(),
             missing: self.tracks.iter().filter(|t| t.missing).count(),
         }
+    }
+
+    // --- session --------------------------------------------------------------------------
+
+    /// Saves where you are so the next start picks up from here: the source shown, the queue
+    /// (in play and original order), the current track and its position. With nothing loaded,
+    /// the saved queue is cleared.
+    pub fn save_session(&mut self) -> Result<()> {
+        let location = match &self.location {
+            Location::AllTracks => "all".to_string(),
+            Location::Playlist { id, .. } => format!("playlist:{id}"),
+        };
+        let queue = (encode_keys(&self.queue), encode_keys(&self.unshuffled));
+        let tx = self.conn.unchecked_transaction()?;
+        db::set_setting(&tx, SESSION_LOCATION, &location)?;
+        match self.queue_index.filter(|_| self.player.is_active()) {
+            Some(index) => {
+                db::set_setting(&tx, SESSION_INDEX, &index.to_string())?;
+                db::set_setting(&tx, SESSION_POSITION_MS, &self.player.position().as_millis().to_string())?;
+                if self.saved_queue.as_ref() != Some(&queue) {
+                    db::set_setting(&tx, SESSION_QUEUE, &queue.0)?;
+                    db::set_setting(&tx, SESSION_UNSHUFFLED, &queue.1)?;
+                }
+            }
+            None => {
+                for key in [SESSION_INDEX, SESSION_POSITION_MS, SESSION_QUEUE, SESSION_UNSHUFFLED] {
+                    db::delete_setting(&tx, key)?;
+                }
+            }
+        }
+        tx.commit()?;
+        self.saved_queue = Some(queue);
+        self.session_saved_at = Instant::now();
+        Ok(())
+    }
+
+    /// Brings back the last saved session: shows the same source, rebuilds the queue (dropping
+    /// tracks whose files are missing now) and loads the current track paused at its position,
+    /// selected in the songs list if it's there.
+    fn restore_session(&mut self) -> Result<()> {
+        let setting = |key| db::get_setting(&self.conn, key);
+        let location = setting(SESSION_LOCATION)?;
+        let index: Option<usize> = setting(SESSION_INDEX)?.and_then(|s| s.parse().ok());
+        let position = setting(SESSION_POSITION_MS)?.and_then(|s| s.parse().ok()).map(Duration::from_millis);
+        let (queue, unshuffled) = (setting(SESSION_QUEUE)?.unwrap_or_default(), setting(SESSION_UNSHUFFLED)?);
+
+        let source = match location.as_deref().and_then(|l| l.strip_prefix("playlist:")) {
+            Some(id) => id.parse().ok().and_then(|id| {
+                self.sidebar
+                    .iter()
+                    .position(|item| matches!(item.location, Location::Playlist { id: p, .. } if p == id))
+            }),
+            None => Some(0),
+        };
+        self.show_source(source.unwrap_or(0))?;
+
+        let Some(index) = index else { return Ok(()) };
+        let tracks = db::tracks_by_id(&self.conn)?;
+        let rebuild = |keys: &str| -> Vec<Track> {
+            decode_keys(keys)
+                .into_iter()
+                .filter_map(|(id, entry_id)| {
+                    let track = tracks.get(&id).filter(|t| !t.missing)?;
+                    Some(Track { entry_id, ..track.clone() })
+                })
+                .collect()
+        };
+        let current = decode_keys(&queue).get(index).copied();
+        self.queue = rebuild(&queue);
+        self.unshuffled = unshuffled.map_or_else(|| self.queue.clone(), |keys| rebuild(&keys));
+        self.saved_queue = Some((encode_keys(&self.queue), encode_keys(&self.unshuffled)));
+
+        let Some(at) = current.and_then(|key| self.queue.iter().position(|t| queue_key(t) == key)) else {
+            return Ok(()); // the current track's file is gone; keep the queue, load nothing
+        };
+        let track = self.queue[at].clone();
+        match self.player.load_paused(&self.root.join(&track.rel_path), position.unwrap_or_default()) {
+            Ok(decoder_duration) => {
+                if let Some(row) = self.visible.iter().position(|&i| queue_key(&self.tracks[i]) == queue_key(&track)) {
+                    self.select(row);
+                }
+                self.now_playing = Some(Track { duration: track.duration.or(decoder_duration), ..track });
+                self.queue_index = Some(at);
+                self.message = Some("picked up where you left off; Space plays".into());
+            }
+            Err(err) => self.message = Some(format!("{err:#}")),
+        }
+        Ok(())
     }
 
     fn poll_watch(&mut self) {
@@ -951,6 +1051,32 @@ const DEFAULT_RIGHT_WIDTH: u16 = 30;
 const SIDEBAR_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 10..=40;
 const RIGHT_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 15..=50;
 const MIN_SONGS_WIDTH: u16 = 25;
+const SESSION_LOCATION: &str = "session_location";
+const SESSION_QUEUE: &str = "session_queue";
+const SESSION_UNSHUFFLED: &str = "session_unshuffled";
+const SESSION_INDEX: &str = "session_index";
+const SESSION_POSITION_MS: &str = "session_position_ms";
+const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// Queue items as `id` or `id:entry` (inside a playlist), comma-separated.
+fn encode_keys(tracks: &[Track]) -> String {
+    let key = |t: &Track| match t.entry_id {
+        Some(entry) => format!("{}:{entry}", t.id),
+        None => t.id.to_string(),
+    };
+    tracks.iter().map(key).collect::<Vec<_>>().join(",")
+}
+
+/// The reverse of `encode_keys`, skipping anything malformed.
+fn decode_keys(keys: &str) -> Vec<(i64, Option<i64>)> {
+    keys.split(',')
+        .filter_map(|key| match key.split_once(':') {
+            Some((id, entry)) => Some((id.parse().ok()?, Some(entry.parse().ok()?))),
+            None => Some((key.parse().ok()?, None)),
+        })
+        .collect()
+}
+
 /// Two clicks on the same row at most this far apart are a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 
@@ -996,6 +1122,15 @@ mod tests {
             missing: false,
             entry_id: None,
         }
+    }
+
+    #[test]
+    fn session_keys_round_trip() {
+        let tracks = vec![track(3), Track { entry_id: Some(17), ..track(5) }, track(9)];
+        assert_eq!(encode_keys(&tracks), "3,5:17,9");
+        assert_eq!(decode_keys("3,5:17,9"), [(3, None), (5, Some(17)), (9, None)]);
+        assert_eq!(decode_keys(""), []);
+        assert_eq!(decode_keys("4,x,5:y,6:7"), [(4, None), (6, Some(7))], "malformed keys skipped");
     }
 
     #[test]
@@ -1389,6 +1524,49 @@ mod tests {
         drop(reopened);
         app.focus_pane(Pane::Songs);
         println!("{}", render(&mut app));
+
+        // Quitting saves the session; the next start shows the same playlist with the same queue,
+        // the song loaded paused at the same spot and selected.
+        app.focus_pane(Pane::Songs);
+        assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Mix 2"));
+        app.select(1);
+        app.activate_selected();
+        app.player.seek_by(1);
+        std::thread::sleep(Duration::from_millis(200));
+        let titles_of = |queue: &[Track]| queue.iter().map(|t| t.display_title()).collect::<Vec<_>>();
+        let (queue, before) = (titles_of(&app.queue), app.player.position());
+        app.save_session().unwrap();
+        let resumed = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
+        assert!(matches!(&resumed.location, Location::Playlist { name, .. } if name == "Mix 2"));
+        assert_eq!((titles_of(&resumed.queue), resumed.queue_index), (queue.clone(), Some(1)));
+        assert_eq!(resumed.now_playing.as_ref().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
+        assert_eq!(resumed.selected_track().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
+        assert!(resumed.player.is_paused(), "loaded paused");
+        std::thread::sleep(Duration::from_millis(200));
+        let at = resumed.player.position();
+        assert!(
+            at + Duration::from_millis(300) >= before && at <= before + Duration::from_millis(300),
+            "at {at:?}, saved {before:?}"
+        );
+        assert_eq!(resumed.message.as_deref(), Some("picked up where you left off; Space plays"));
+        drop(resumed);
+
+        // A track whose file went missing meanwhile drops out of the restored queue.
+        db::set_missing(&app.conn, "tone2.mp3", true).unwrap();
+        let resumed = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
+        assert_eq!(titles_of(&resumed.queue), ["Tone 1", "Tone 3"]);
+        assert_eq!(resumed.now_playing.as_ref().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
+        drop(resumed);
+        db::set_missing(&app.conn, "tone2.mp3", false).unwrap();
+
+        // After stopping, there's nothing to pick up.
+        app.stop();
+        app.save_session().unwrap();
+        let resumed = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
+        assert!(resumed.now_playing.is_none() && resumed.queue.is_empty());
+        drop(resumed);
+        app.select(1);
+        app.activate_selected();
 
         // Help fits a normal terminal; on a short one it scrolls, stopping at the last line.
         app.mode = Mode::Help { scroll: 0 };

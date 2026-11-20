@@ -49,6 +49,10 @@ impl Player {
     /// Starts playing `path`, replacing whatever was playing. Returns the
     /// decoder's duration if it knows one.
     pub fn play(&mut self, path: &Path) -> Result<Option<Duration>> {
+        self.start(path, false)
+    }
+
+    fn start(&mut self, path: &Path, paused: bool) -> Result<Option<Duration>> {
         if self.broken {
             self.reopen_device()?;
         }
@@ -59,9 +63,24 @@ impl Player {
         // A fresh rodio player per track; dropping the old one stops it.
         let player = RodioPlayer::connect_new(self.device.mixer());
         player.set_volume(self.volume);
+        if paused {
+            // Before the source is added, so not a sample is heard.
+            player.pause();
+        }
         player.append(source);
         self.current = Some(player);
         self.current_path = Some(path.to_path_buf());
+        Ok(duration)
+    }
+
+    /// Loads `path` paused at `position`, ready for `toggle_pause` to start it: how a saved
+    /// session comes back. The player is paused before the track is added, so nothing is heard;
+    /// the seek is still carried out by the audio thread while paused.
+    pub fn load_paused(&mut self, path: &Path, position: Duration) -> Result<Option<Duration>> {
+        let duration = self.start(path, true)?;
+        if let Some(p) = &self.current {
+            let _ = p.try_seek(position);
+        }
         Ok(duration)
     }
 
@@ -102,12 +121,9 @@ impl Player {
         };
         self.reopen_device()?;
         if let Some((path, position, paused)) = resume {
-            self.play(&path)?;
+            self.start(&path, paused)?;
             if let Some(p) = &self.current {
                 let _ = p.try_seek(position);
-                if paused {
-                    p.pause();
-                }
             }
         }
         Ok(())
