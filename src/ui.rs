@@ -1,5 +1,5 @@
-//! Draws the browser, the queue, the transport bar (with the current song above it) and any
-//! open prompt.
+//! Draws the three columns (sidebar, songs, queue), the transport bar with the current song
+//! above it, the status line, and any open prompt.
 
 use std::time::Duration;
 
@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Gauge, List, ListItem, Paragraph};
 
-use crate::app::{App, Entry, InputPurpose, Location, Mode, Repeat, location_name};
+use crate::app::{App, InputPurpose, Location, Mode, Pane, PaneRects, Repeat, location_name};
 
 const ACCENT: Color = Color::Cyan;
 
@@ -18,12 +18,14 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
     (
         "Browsing",
         &[
-            ("↑ ↓  j k", "Move the selection"),
+            ("↑ ↓  j k", "Move the selection in the focused pane"),
             ("PgUp PgDn", "Move 10 at a time"),
             ("g G  Home End", "Jump to the top / bottom"),
-            ("Enter  l", "Open a folder, or play a track and queue the rest of the list"),
-            ("Backspace  h", "Back to the top level"),
-            ("< >", "Narrow / widen the browser (or drag the divider)"),
+            ("Tab", "Switch between the sidebar and the songs list"),
+            ("Enter  l", "Sidebar: go to its songs. Songs: play, queue the rest"),
+            ("Backspace  h", "Back to the sidebar"),
+            ("< >", "Move the divider right of the focused pane"),
+            ("Mouse", "Click to focus and select, wheel scrolls, drag dividers"),
             ("u", "Rescan now (changes are picked up automatically)"),
         ],
     ),
@@ -57,8 +59,8 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("a", "Add the selected track to a playlist"),
             ("A", "Add all tracks shown to a playlist (skips duplicates)"),
             ("N", "New playlist"),
-            ("R", "Rename the selected playlist, or the one you're in"),
-            ("d", "Remove track from playlist / delete selected playlist"),
+            ("R", "Rename the playlist being shown"),
+            ("d", "Songs: remove from playlist. Sidebar: delete playlist"),
             ("J K", "Move a track down / up in the playlist"),
         ],
     ),
@@ -68,52 +70,79 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, transport, status] =
         Layout::vertical([Constraint::Min(3), Constraint::Length(3), Constraint::Length(1)]).areas(frame.area());
-    let width = app.browser_width;
-    let [browser, queue] =
-        Layout::horizontal([Constraint::Percentage(width), Constraint::Percentage(100 - width)]).areas(main);
-    // Remembered for mouse hit-testing: the divider is the queue's left border (the browser's
-    // right border is just left of it).
-    app.panels = main;
-    app.divider_x = queue.x;
+    let [sidebar, songs, right] = Layout::horizontal([
+        Constraint::Percentage(app.sidebar_width),
+        Constraint::Fill(1),
+        Constraint::Percentage(app.right_width),
+    ])
+    .areas(main);
+    // Remembered for mouse hit-testing (dividers, clicks, the wheel).
+    app.panes = PaneRects { sidebar, songs, right };
 
-    draw_browser(frame, app, browser);
-    draw_queue(frame, app, queue);
+    draw_sidebar(frame, app, sidebar);
+    draw_songs(frame, app, songs);
+    draw_queue(frame, app, right);
     draw_transport(frame, app, transport);
     draw_status(frame, app, status);
     draw_popup(frame, app);
 }
 
-fn draw_browser(frame: &mut Frame, app: &mut App, area: Rect) {
+/// A pane's border and selection styles: the focused pane's border is accented and its
+/// selection filled; the other pane keeps a quieter selection so you can see both.
+fn pane_styles(app: &App, pane: Pane) -> (Style, Style) {
+    if app.focus == pane {
+        (Style::new().fg(ACCENT), Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+    } else {
+        (Style::new(), Style::new().add_modifier(Modifier::BOLD))
+    }
+}
+
+fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Counts right-aligned: the row is the inner width minus the highlight symbol.
+    let row_width = usize::from(area.width.saturating_sub(3));
+    let items: Vec<ListItem> = app
+        .sidebar
+        .iter()
+        .map(|item| {
+            let count = item.count.to_string();
+            let name_width = row_width.saturating_sub(count.chars().count() + 1);
+            let name: String = location_name(&item.location).chars().take(name_width).collect();
+            let gap = row_width.saturating_sub(name.chars().count() + count.chars().count()).max(1);
+            let name = if item.location == Location::AllTracks { Span::raw(name).bold() } else { Span::raw(name) };
+            ListItem::new(Line::from(vec![name, Span::raw(" ".repeat(gap)), Span::raw(count).dark_gray()]))
+        })
+        .collect();
+    let (border, highlight) = pane_styles(app, Pane::Sidebar);
+    let block = Block::bordered()
+        .border_style(border)
+        .title(" Library ")
+        .title_bottom(Line::from(format!(" {} ", display_path(&app.root))).dark_gray());
+    let list = List::new(items).block(block).highlight_style(highlight).highlight_symbol("▌");
+    frame.render_stateful_widget(list, area, &mut app.sidebar_state);
+}
+
+fn draw_songs(frame: &mut Frame, app: &mut App, area: Rect) {
     let playing = app.now_playing.as_ref().map(|t| t.id);
     let items: Vec<ListItem> = (0..app.visible.len())
-        .filter_map(|i| app.entry(i))
-        .map(|entry| {
-            let line = match entry {
-                Entry::Parent => Line::from("../").dark_gray(),
-                Entry::Folder { location, count } => Line::from(vec![
-                    Span::raw(format!("{}/", location_name(location))).fg(ACCENT),
-                    Span::raw(format!("  {count}")).dark_gray(),
-                ]),
-                Entry::Track(t) if t.missing => Line::from(format!("  {}  (missing)", t.label())).dark_gray(),
-                Entry::Track(t) if Some(t.id) == playing => Line::from(format!("♪ {}", t.label())).bold().green(),
-                Entry::Track(t) => Line::from(format!("  {}", t.label())),
+        .filter_map(|i| app.track(i))
+        .map(|t| {
+            let line = if t.missing {
+                Line::from(format!("  {}  (missing)", t.label())).dark_gray()
+            } else if Some(t.id) == playing {
+                Line::from(format!("♪ {}", t.label())).bold().green()
+            } else {
+                Line::from(format!("  {}", t.label()))
             };
             ListItem::new(line)
         })
         .collect();
 
-    let title = match &app.location {
-        Location::Root => format!(" {} ", display_path(&app.root)),
-        other => format!(" {} ", location_name(other)),
-    };
-    let mut block = Block::bordered().title(title);
+    let (border, highlight) = pane_styles(app, Pane::Songs);
+    let mut block = Block::bordered().border_style(border).title(format!(" {} ", location_name(&app.location)));
     if let Some(scan) = &app.scan_status {
         block = block.title_top(Line::from(format!(" {scan} ")).right_aligned().dark_gray());
     }
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
-        .highlight_symbol("▌");
+    let list = List::new(items).block(block).highlight_style(highlight).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
 
@@ -217,13 +246,18 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
     } else if !app.filter.is_empty() {
         Line::from(format!(" filter: {}  (esc clears)", app.filter)).fg(ACCENT)
     } else {
-        let help = match app.location {
-            Location::Root => " enter open · N new playlist · R rename · d delete · u rescan · ? help · q quit",
-            Location::AllTracks => {
-                " enter play · / filter · a add to playlist · A add all · space pause · n/p · z shuffle · r repeat · ? help"
+        let help = match (app.focus, &app.location) {
+            (Pane::Sidebar, Location::AllTracks) => {
+                " j/k choose · enter songs · N new playlist · A add all to playlist · u rescan · ? help · q quit"
             }
-            Location::Playlist { .. } => {
-                " enter play · / filter · a/A add · d remove · J/K move · space pause · z/r shuffle/repeat · ? help"
+            (Pane::Sidebar, Location::Playlist { .. }) => {
+                " j/k choose · enter songs · N new · R rename · d delete playlist · A add all · ? help · q quit"
+            }
+            (Pane::Songs, Location::AllTracks) => {
+                " enter play · / filter · a/A add to playlist · tab sidebar · space pause · n/p · z/r · ? help"
+            }
+            (Pane::Songs, Location::Playlist { .. }) => {
+                " enter play · / filter · a/A add · d remove · J/K move · tab sidebar · space · z/r · ? help"
             }
         };
         Line::from(help).dark_gray()

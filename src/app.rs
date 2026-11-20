@@ -1,8 +1,8 @@
-//! Application state: where you are in the virtual folder tree, the play queue, what's playing,
-//! and any prompt or picker that's open.
+//! Application state: the sidebar of sources (All Tracks and the playlists), the songs of the
+//! selected source, the play queue, what's playing, and any prompt or popup that's open.
 //!
-//! The tree is: the top level holds "All Tracks" plus one folder per playlist, and each of
-//! those holds tracks.
+//! Two panes take keyboard focus: the sidebar and the songs list. The sidebar's selection is
+//! always the source the songs list shows, so moving through the sidebar previews each one.
 
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -20,17 +20,49 @@ use crate::player::Player;
 use crate::scan::{self, ScanEvent};
 use crate::watch::Watch;
 
+/// A source of songs shown in the sidebar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
-    Root,
     AllTracks,
     Playlist { id: i64, name: String },
 }
 
-pub enum Entry {
-    Parent,
-    Folder { location: Location, count: usize },
-    Track(Track),
+impl Location {
+    /// Same source, even if a playlist was renamed since.
+    fn same_source(&self, other: &Location) -> bool {
+        match (self, other) {
+            (Location::AllTracks, Location::AllTracks) => true,
+            (Location::Playlist { id: a, .. }, Location::Playlist { id: b, .. }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+pub struct SidebarItem {
+    pub location: Location,
+    pub count: usize,
+}
+
+/// The panes that take keyboard focus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pane {
+    Sidebar,
+    Songs,
+}
+
+/// The two draggable borders between the three columns.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Divider {
+    SidebarSongs,
+    SongsRight,
+}
+
+/// Where the last frame put each column, for mouse hit-testing. Set by `ui::draw`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PaneRects {
+    pub sidebar: Rect,
+    pub songs: Rect,
+    pub right: Rect,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,7 +101,7 @@ impl Repeat {
 }
 
 pub enum InputPurpose {
-    /// Create a playlist, optionally adding a track to it straight away.
+    /// Create a playlist, optionally adding tracks to it straight away.
     NewPlaylist {
         then_add: Vec<i64>,
     },
@@ -78,7 +110,7 @@ pub enum InputPurpose {
 
 pub enum Mode {
     Normal,
-    /// Typing into the filter line; the list narrows as you type.
+    /// Typing into the filter line; the songs list narrows as you type.
     Filter,
     Input {
         purpose: InputPurpose,
@@ -107,12 +139,17 @@ pub struct App {
     db_path: PathBuf,
     conn: Connection,
 
+    pub focus: Pane,
+    /// All Tracks, then one item per playlist. Never empty.
+    pub sidebar: Vec<SidebarItem>,
+    pub sidebar_state: ListState,
+    /// The source the songs list shows: always the sidebar's selection.
     pub location: Location,
-    entries: Vec<Entry>,
-    /// The text the filter matches against, one per entry.
+    tracks: Vec<Track>,
+    /// The text the filter matches against, one per track.
     haystacks: Vec<Utf32String>,
     fuzzy: Filter,
-    /// Indices into `entries` that match the filter, in display order.
+    /// Indices into `tracks` that match the filter, in display order.
     pub visible: Vec<usize>,
     pub filter: String,
     pub list_state: ListState,
@@ -136,13 +173,11 @@ pub struct App {
     /// Ask the main loop to repaint the whole screen, wiping anything another library may
     /// have written over it.
     pub needs_full_redraw: bool,
-    /// The browser's share of the width, in percent; the queue gets the rest.
-    pub browser_width: u16,
-    /// Where the last frame put the two main panels and the divider between them, so mouse
-    /// events can be hit-tested. Set by `ui::draw`.
-    pub panels: Rect,
-    pub divider_x: u16,
-    dragging_divider: bool,
+    /// Column widths in percent of the screen; the songs list gets the rest.
+    pub sidebar_width: u16,
+    pub right_width: u16,
+    pub panes: PaneRects,
+    dragging: Option<Divider>,
     pub should_quit: bool,
 }
 
@@ -153,8 +188,11 @@ impl App {
             root,
             db_path,
             conn,
-            location: Location::Root,
-            entries: Vec::new(),
+            focus: Pane::Songs,
+            sidebar: Vec::new(),
+            sidebar_state: ListState::default(),
+            location: Location::AllTracks,
+            tracks: Vec::new(),
             haystacks: Vec::new(),
             fuzzy: Filter::new(),
             visible: Vec::new(),
@@ -173,10 +211,10 @@ impl App {
             scan_rx: None,
             watch: None,
             needs_full_redraw: false,
-            browser_width: DEFAULT_BROWSER_WIDTH,
-            panels: Rect::default(),
-            divider_x: 0,
-            dragging_divider: false,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            right_width: DEFAULT_RIGHT_WIDTH,
+            panes: PaneRects::default(),
+            dragging: None,
             should_quit: false,
         };
         match Watch::start(&app.root) {
@@ -185,104 +223,93 @@ impl App {
         }
         app.shuffle = db::get_setting(&app.conn, SHUFFLE_SETTING)?.as_deref() == Some("1");
         app.repeat = Repeat::parse(db::get_setting(&app.conn, REPEAT_SETTING)?.as_deref().unwrap_or_default());
-        if let Some(width) = db::get_setting(&app.conn, BROWSER_WIDTH_SETTING)?.and_then(|w| w.parse().ok()) {
-            app.browser_width = clamp_browser_width(width);
-        }
+        let saved_width =
+            |key| -> Result<Option<u16>> { Ok(db::get_setting(&app.conn, key)?.and_then(|w| w.parse().ok())) };
+        let (sidebar, right) = (saved_width(SIDEBAR_WIDTH_SETTING)?, saved_width(RIGHT_WIDTH_SETTING)?);
+        app.sidebar_width = sidebar.unwrap_or(DEFAULT_SIDEBAR_WIDTH);
+        app.right_width = right.unwrap_or(DEFAULT_RIGHT_WIDTH);
+        app.clamp_widths(Divider::SongsRight);
         app.reload()?;
+        app.select(0);
         app.rescan();
         Ok(app)
     }
 
     // --- listing --------------------------------------------------------------------------
 
-    pub fn entry(&self, visible_index: usize) -> Option<&Entry> {
-        self.visible.get(visible_index).and_then(|&i| self.entries.get(i))
+    pub fn track(&self, visible_index: usize) -> Option<&Track> {
+        self.visible.get(visible_index).and_then(|&i| self.tracks.get(i))
     }
 
-    pub fn selected(&self) -> Option<&Entry> {
-        self.list_state.selected().and_then(|i| self.entry(i))
+    pub fn selected_track(&self) -> Option<&Track> {
+        self.list_state.selected().and_then(|i| self.track(i))
     }
 
-    fn selected_track(&self) -> Option<&Track> {
-        match self.selected() {
-            Some(Entry::Track(t)) => Some(t),
-            _ => None,
+    fn load_sidebar(&self) -> Result<Vec<SidebarItem>> {
+        let mut items = vec![SidebarItem { location: Location::AllTracks, count: db::track_count(&self.conn)? }];
+        items.extend(
+            db::playlists(&self.conn)?
+                .into_iter()
+                .map(|p| SidebarItem { location: Location::Playlist { id: p.id, name: p.name }, count: p.track_count }),
+        );
+        Ok(items)
+    }
+
+    fn load_tracks(&self, location: &Location) -> Result<Vec<Track>> {
+        match location {
+            Location::AllTracks => db::all_tracks(&self.conn),
+            Location::Playlist { id, .. } => db::playlist_tracks(&self.conn, *id),
         }
     }
 
-    fn load_entries(&self, location: &Location) -> Result<Vec<Entry>> {
-        Ok(match location {
-            Location::Root => {
-                let mut entries =
-                    vec![Entry::Folder { location: Location::AllTracks, count: db::track_count(&self.conn)? }];
-                entries.extend(db::playlists(&self.conn)?.into_iter().map(|p| Entry::Folder {
-                    location: Location::Playlist { id: p.id, name: p.name },
-                    count: p.track_count,
-                }));
-                entries
-            }
-            Location::AllTracks => {
-                let mut entries = vec![Entry::Parent];
-                entries.extend(db::all_tracks(&self.conn)?.into_iter().map(Entry::Track));
-                entries
-            }
-            Location::Playlist { id, .. } => {
-                let mut entries = vec![Entry::Parent];
-                entries.extend(db::playlist_tracks(&self.conn, *id)?.into_iter().map(Entry::Track));
-                entries
-            }
-        })
-    }
-
-    /// Re-reads the current location, keeping the selection position where possible.
+    /// Re-reads the sidebar and the songs list, keeping both selections where possible. If
+    /// the shown playlist was deleted, the source now at its position is shown instead.
     pub fn reload(&mut self) -> Result<()> {
-        let entries = self.load_entries(&self.location)?;
-        self.set_entries(entries);
+        self.sidebar = self.load_sidebar()?;
+        match self.sidebar.iter().position(|item| item.location.same_source(&self.location)) {
+            Some(i) => {
+                self.sidebar_state.select(Some(i));
+                self.location = self.sidebar[i].location.clone(); // picks up renames
+                self.reload_tracks()
+            }
+            None => {
+                let i = self.sidebar_state.selected().unwrap_or(0).min(self.sidebar.len() - 1);
+                self.show_source(i)
+            }
+        }
+    }
+
+    fn reload_tracks(&mut self) -> Result<()> {
+        let tracks = self.load_tracks(&self.location)?;
+        self.set_tracks(tracks);
         self.apply_filter();
         Ok(())
     }
 
-    fn navigate(&mut self, location: Location) -> Result<()> {
-        let came_from = std::mem::replace(&mut self.location, location);
+    /// Shows the sidebar item at `index` in the songs list, from the top, unfiltered.
+    fn show_source(&mut self, index: usize) -> Result<()> {
+        self.sidebar_state.select(Some(index));
+        self.location = self.sidebar[index].location.clone();
         self.filter.clear();
-        let entries = self.load_entries(&self.location)?;
-        self.set_entries(entries);
-        self.apply_filter();
-        // Going up selects the folder we left; going down selects the first track.
-        let index = if self.location == Location::Root {
-            self.visible
-                .iter()
-                .position(|&i| matches!(&self.entries[i], Entry::Folder { location, .. } if *location == came_from))
-        } else {
-            self.visible.iter().position(|&i| matches!(self.entries[i], Entry::Track(_)))
-        };
-        self.select(index.unwrap_or(0));
+        self.reload_tracks()?;
+        self.select(0);
         Ok(())
     }
 
-    fn set_entries(&mut self, entries: Vec<Entry>) {
-        self.haystacks = entries
-            .iter()
-            .map(|e| match e {
-                Entry::Parent => Utf32String::default(),
-                Entry::Folder { location, .. } => location_name(location).into(),
-                Entry::Track(t) => format!("{} {}", t.label(), t.album.as_deref().unwrap_or_default()).into(),
-            })
-            .collect();
-        self.entries = entries;
+    fn set_tracks(&mut self, tracks: Vec<Track>) {
+        self.haystacks =
+            tracks.iter().map(|t| format!("{} {}", t.label(), t.album.as_deref().unwrap_or_default()).into()).collect();
+        self.tracks = tracks;
     }
 
     fn apply_filter(&mut self) {
         if self.filter.trim().is_empty() {
-            self.visible = (0..self.entries.len()).collect();
+            self.visible = (0..self.tracks.len()).collect();
         } else {
-            // `..` stays on top; in All Tracks the best matches come next, while playlists keep
-            // their order so the list still reads (and reorders) as the playlist.
-            let parent = matches!(self.entries.first(), Some(Entry::Parent));
-            let offset = usize::from(parent);
+            // In All Tracks the best matches come first; playlists keep their order so the
+            // list still reads (and reorders) as the playlist.
             let rank = self.location == Location::AllTracks;
-            let matched = self.fuzzy.matches(&self.filter, &self.haystacks[offset..], rank);
-            self.visible = (0..offset).chain(matched.into_iter().map(|i| i + offset)).collect();
+            self.visible = self.fuzzy.matches(&self.filter, &self.haystacks, rank);
         }
         let index = self.list_state.selected().unwrap_or(0);
         self.select(index);
@@ -296,40 +323,75 @@ impl App {
         }
     }
 
+    /// Moves the selection in the focused pane. In the sidebar that also changes the source.
     pub fn move_selection(&mut self, delta: isize) {
-        let current = self.list_state.selected().unwrap_or(0) as isize;
-        self.select((current + delta).max(0) as usize);
+        self.move_in(self.focus, delta);
+    }
+
+    fn move_in(&mut self, pane: Pane, delta: isize) {
+        match pane {
+            Pane::Songs => {
+                let current = self.list_state.selected().unwrap_or(0) as isize;
+                self.select((current + delta).max(0) as usize);
+            }
+            Pane::Sidebar => {
+                let current = self.sidebar_state.selected().unwrap_or(0);
+                let last = self.sidebar.len() - 1;
+                self.select_source((current as isize + delta).clamp(0, last as isize) as usize);
+            }
+        }
+    }
+
+    fn select_source(&mut self, index: usize) {
+        if Some(index) != self.sidebar_state.selected() {
+            let result = self.show_source(index);
+            self.report(result);
+        }
     }
 
     pub fn select_first(&mut self) {
-        self.select(0);
+        match self.focus {
+            Pane::Songs => self.select(0),
+            Pane::Sidebar => self.select_source(0),
+        }
     }
 
     pub fn select_last(&mut self) {
-        self.select(usize::MAX);
+        match self.focus {
+            Pane::Songs => self.select(usize::MAX),
+            Pane::Sidebar => self.select_source(self.sidebar.len() - 1),
+        }
+    }
+
+    // --- focus ----------------------------------------------------------------------------
+
+    pub fn focus_pane(&mut self, pane: Pane) {
+        self.focus = pane;
+    }
+
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            Pane::Sidebar => Pane::Songs,
+            Pane::Songs => Pane::Sidebar,
+        };
     }
 
     // --- actions --------------------------------------------------------------------------
 
+    /// Enter: in the sidebar, moves into the songs list; in the songs list, plays the track and
+    /// queues the rest of the list.
     pub fn activate_selected(&mut self) {
-        let Some(index) = self.list_state.selected() else { return };
-        let result = match self.entry(index) {
-            Some(Entry::Parent) => self.navigate(Location::Root),
-            Some(Entry::Folder { location, .. }) => self.navigate(location.clone()),
-            Some(Entry::Track(t)) if t.missing => {
-                Err(anyhow::anyhow!("{} is missing from the music folder", t.rel_path))
-            }
-            Some(Entry::Track(chosen)) => {
-                // Queue everything playable in this (filtered) view, starting at the chosen track.
+        if self.focus == Pane::Sidebar {
+            self.focus = Pane::Songs;
+            return;
+        }
+        let result = match self.selected_track() {
+            Some(t) if t.missing => Err(anyhow::anyhow!("{} is missing from the music folder", t.rel_path)),
+            Some(chosen) => {
+                // Queue everything playable in this (filtered) list, starting at the chosen track.
                 let chosen = queue_key(chosen);
-                self.unshuffled = self
-                    .visible
-                    .iter()
-                    .filter_map(|&i| match &self.entries[i] {
-                        Entry::Track(t) if !t.missing => Some(t.clone()),
-                        _ => None,
-                    })
-                    .collect();
+                self.unshuffled =
+                    self.visible.iter().map(|&i| &self.tracks[i]).filter(|t| !t.missing).cloned().collect();
                 let start = self.unshuffled.iter().position(|t| queue_key(t) == chosen).unwrap_or(0);
                 if self.shuffle {
                     self.queue = shuffled_from(&self.unshuffled, start);
@@ -345,13 +407,6 @@ impl App {
         self.report(result);
     }
 
-    pub fn go_up(&mut self) {
-        if self.location != Location::Root {
-            let result = self.navigate(Location::Root);
-            self.report(result);
-        }
-    }
-
     pub fn rescan(&mut self) {
         if self.scan_rx.is_none() {
             self.scan_status = Some("scanning…".into());
@@ -361,22 +416,15 @@ impl App {
 
     /// Opens the playlist picker for the selected track.
     pub fn start_add_to_playlist(&mut self) {
-        match self.selected_track().map(|t| t.id) {
-            Some(id) => self.open_picker(vec![id], false),
-            None => self.message = Some("select a track to add it to a playlist".into()),
+        match (self.focus, self.selected_track().map(|t| t.id)) {
+            (Pane::Songs, Some(id)) => self.open_picker(vec![id], false),
+            _ => self.message = Some("select a song to add it to a playlist (A adds the whole list)".into()),
         }
     }
 
-    /// Opens the playlist picker for every track in the current (filtered) view.
+    /// Opens the playlist picker for every track in the songs list (as filtered).
     pub fn start_add_all_to_playlist(&mut self) {
-        let ids: Vec<i64> = self
-            .visible
-            .iter()
-            .filter_map(|&i| match &self.entries[i] {
-                Entry::Track(t) => Some(t.id),
-                _ => None,
-            })
-            .collect();
+        let ids: Vec<i64> = self.visible.iter().map(|&i| self.tracks[i].id).collect();
         if ids.is_empty() {
             self.message = Some("no tracks here to add".into());
         } else {
@@ -403,31 +451,30 @@ impl App {
         self.mode = Mode::Input { purpose: InputPurpose::NewPlaylist { then_add: Vec::new() }, text: String::new() };
     }
 
-    /// Rename the selected playlist folder, or the playlist you're inside.
+    /// Renames the playlist being shown (the sidebar's selection).
     pub fn start_rename(&mut self) {
-        if let Some((id, name)) = self.target_playlist() {
-            self.mode = Mode::Input { purpose: InputPurpose::RenamePlaylist(id), text: name };
+        if let Location::Playlist { id, name } = &self.location {
+            self.mode = Mode::Input { purpose: InputPurpose::RenamePlaylist(*id), text: name.clone() };
         }
     }
 
-    /// In a playlist, removes the selected track from it; at the top level, asks to delete
-    /// the selected playlist.
+    /// In the songs list of a playlist, removes the selected track from it; in the sidebar,
+    /// asks to delete the selected playlist.
     pub fn delete_selected(&mut self) {
-        match (&self.location, self.selected()) {
-            (Location::Playlist { .. }, Some(Entry::Track(t))) => {
-                let result = t.entry_id.map_or(Ok(()), |e| db::remove_entry(&self.conn, e)).and_then(|_| self.reload());
+        let Location::Playlist { id, name } = &self.location else { return };
+        match self.focus {
+            Pane::Sidebar => self.mode = Mode::ConfirmDelete { playlist_id: *id, name: name.clone() },
+            Pane::Songs => {
+                let Some(entry) = self.selected_track().and_then(|t| t.entry_id) else { return };
+                let result = db::remove_entry(&self.conn, entry).and_then(|_| self.reload());
                 self.report(result);
             }
-            (Location::Root, Some(Entry::Folder { location: Location::Playlist { id, name }, .. })) => {
-                self.mode = Mode::ConfirmDelete { playlist_id: *id, name: name.clone() };
-            }
-            _ => {}
         }
     }
 
     /// Moves the selected playlist track up (-1) or down (+1).
     pub fn move_entry(&mut self, delta: isize) {
-        if !matches!(self.location, Location::Playlist { .. }) {
+        if self.focus != Pane::Songs || !matches!(self.location, Location::Playlist { .. }) {
             return;
         }
         if !self.filter.is_empty() {
@@ -436,24 +483,11 @@ impl App {
         }
         let Some(from) = self.list_state.selected() else { return };
         let to = from as isize + delta;
-        let entry_at = |i: isize| match usize::try_from(i).ok().and_then(|i| self.entry(i)) {
-            Some(Entry::Track(t)) => t.entry_id,
-            _ => None,
-        };
+        let entry_at = |i: isize| usize::try_from(i).ok().and_then(|i| self.track(i)).and_then(|t| t.entry_id);
         if let (Some(a), Some(b)) = (entry_at(from as isize), entry_at(to)) {
             let result = db::swap_entries(&mut self.conn, a, b).and_then(|_| self.reload());
             self.report(result);
             self.select(to as usize);
-        }
-    }
-
-    fn target_playlist(&self) -> Option<(i64, String)> {
-        match (&self.location, self.selected()) {
-            (Location::Playlist { id, name }, _) => Some((*id, name.clone())),
-            (Location::Root, Some(Entry::Folder { location: Location::Playlist { id, name }, .. })) => {
-                Some((*id, name.clone()))
-            }
-            _ => None,
         }
     }
 
@@ -489,8 +523,12 @@ impl App {
         }
         let result = match purpose {
             InputPurpose::NewPlaylist { then_add } => db::create_playlist(&self.conn, name).and_then(|id| {
-                let added = db::add_tracks(&self.conn, id, &then_add, false)?;
-                if added > 0 {
+                if then_add.is_empty() {
+                    // A new empty playlist: show it, ready to fill.
+                    self.location = Location::Playlist { id, name: name.to_string() };
+                    self.filter.clear();
+                } else {
+                    let added = db::add_tracks(&self.conn, id, &then_add, false)?;
                     self.message = Some(added_message(added, added, name));
                 }
                 Ok(())
@@ -517,8 +555,7 @@ impl App {
     pub fn set_filter(&mut self, filter: String) {
         self.filter = filter;
         self.apply_filter();
-        let first_match = self.visible.iter().position(|&i| !matches!(self.entries[i], Entry::Parent));
-        self.select(first_match.unwrap_or(0));
+        self.select(0);
     }
 
     // --- playback -------------------------------------------------------------------------
@@ -572,43 +609,115 @@ impl App {
         }
     }
 
-    // --- panel sizes ----------------------------------------------------------------------
+    // --- panel sizes and the mouse --------------------------------------------------------
 
-    /// Widens (positive) or narrows (negative) the browser by `delta` percent and saves it.
-    pub fn resize_browser(&mut self, delta: i16) {
-        self.set_browser_width(self.browser_width.saturating_add_signed(delta), true);
+    /// `<` / `>`: moves the divider on the right of the focused pane by `delta` percent
+    /// (positive is rightwards) and saves it.
+    pub fn resize_focused(&mut self, delta: i16) {
+        match self.focus {
+            Pane::Sidebar => {
+                self.sidebar_width = self.sidebar_width.saturating_add_signed(delta);
+                self.clamp_widths(Divider::SidebarSongs);
+            }
+            Pane::Songs => {
+                self.right_width = self.right_width.saturating_add_signed(-delta);
+                self.clamp_widths(Divider::SongsRight);
+            }
+        }
+        self.save_widths();
     }
 
-    fn set_browser_width(&mut self, width: u16, save: bool) {
-        self.browser_width = clamp_browser_width(width);
-        if save {
-            let result = db::set_setting(&self.conn, BROWSER_WIDTH_SETTING, &self.browser_width.to_string());
-            self.report(result);
+    /// Keeps each column within its limits and the songs list at least `MIN_SONGS_WIDTH`;
+    /// when the two side columns don't fit, the one beside `moved` gives way.
+    fn clamp_widths(&mut self, moved: Divider) {
+        self.sidebar_width = self.sidebar_width.clamp(*SIDEBAR_WIDTH_RANGE.start(), *SIDEBAR_WIDTH_RANGE.end());
+        self.right_width = self.right_width.clamp(*RIGHT_WIDTH_RANGE.start(), *RIGHT_WIDTH_RANGE.end());
+        let room = 100 - MIN_SONGS_WIDTH;
+        if self.sidebar_width + self.right_width > room {
+            match moved {
+                Divider::SidebarSongs => self.sidebar_width = room - self.right_width,
+                Divider::SongsRight => self.right_width = room - self.sidebar_width,
+            }
         }
     }
 
-    /// A left click: starts dragging if it landed on the divider between the panels.
+    fn save_widths(&mut self) {
+        let result = db::set_setting(&self.conn, SIDEBAR_WIDTH_SETTING, &self.sidebar_width.to_string())
+            .and_then(|_| db::set_setting(&self.conn, RIGHT_WIDTH_SETTING, &self.right_width.to_string()));
+        self.report(result);
+    }
+
+    fn pane_at(&self, column: u16, row: u16) -> Option<Pane> {
+        let inside = |r: Rect| column >= r.x && column < r.x + r.width && row >= r.y && row < r.y + r.height;
+        if inside(self.panes.sidebar) {
+            Some(Pane::Sidebar)
+        } else if inside(self.panes.songs) {
+            Some(Pane::Songs)
+        } else {
+            None
+        }
+    }
+
+    /// A left click: grabs a divider if it landed on one (either border of the pair), otherwise
+    /// focuses the pane under the pointer and selects the clicked row.
     pub fn mouse_down(&mut self, column: u16, row: u16) {
-        let on_divider = column + 1 >= self.divider_x && column <= self.divider_x;
-        let in_panels = row >= self.panels.y && row < self.panels.y + self.panels.height;
-        self.dragging_divider = on_divider && in_panels;
+        let (songs, right) = (self.panes.songs, self.panes.right);
+        let in_rows = row >= songs.y && row < songs.y + songs.height;
+        let on = |x: u16| in_rows && column + 1 >= x && column <= x;
+        self.dragging = if on(songs.x) {
+            Some(Divider::SidebarSongs)
+        } else if on(right.x) {
+            Some(Divider::SongsRight)
+        } else {
+            None
+        };
+        if self.dragging.is_some() {
+            return;
+        }
+        let Some(pane) = self.pane_at(column, row) else { return };
+        self.focus = pane;
+        let (area, offset) = match pane {
+            Pane::Sidebar => (self.panes.sidebar, self.sidebar_state.offset()),
+            Pane::Songs => (self.panes.songs, self.list_state.offset()),
+        };
+        // Rows inside the border; the top border row selects nothing.
+        if row > area.y && row + 1 < area.y + area.height {
+            let index = offset + usize::from(row - area.y - 1);
+            match pane {
+                Pane::Sidebar if index < self.sidebar.len() => self.select_source(index),
+                Pane::Songs if index < self.visible.len() => self.select(index),
+                _ => {}
+            }
+        }
     }
 
-    /// Moves the divider to follow the mouse while dragging. Saved when the button is released.
+    /// Moves the grabbed divider to follow the pointer. Saved when the button is released.
     pub fn mouse_drag(&mut self, column: u16) {
-        if self.dragging_divider && self.panels.width > 0 {
-            // The queue's left border follows the pointer, so grabbing it doesn't jump.
-            let browser_columns = column.saturating_sub(self.panels.x);
-            let width =
-                (u32::from(browser_columns) * 100 + u32::from(self.panels.width) / 2) / u32::from(self.panels.width);
-            self.set_browser_width(width as u16, false);
+        let total = self.panes.sidebar.width + self.panes.songs.width + self.panes.right.width;
+        let Some(divider) = self.dragging else { return };
+        if total == 0 {
+            return;
         }
+        let x = self.panes.sidebar.x;
+        let percent = |columns: u16| ((u32::from(columns) * 100 + u32::from(total) / 2) / u32::from(total)) as u16;
+        match divider {
+            // The border being dragged follows the pointer, so grabbing it doesn't jump.
+            Divider::SidebarSongs => self.sidebar_width = percent(column.saturating_sub(x)),
+            Divider::SongsRight => self.right_width = percent((x + total).saturating_sub(column)),
+        }
+        self.clamp_widths(divider);
     }
 
     pub fn mouse_up(&mut self) {
-        if std::mem::take(&mut self.dragging_divider) {
-            self.set_browser_width(self.browser_width, true);
+        if self.dragging.take().is_some() {
+            self.save_widths();
         }
+    }
+
+    /// The mouse wheel: scrolls the pane under the pointer (the focused one elsewhere).
+    pub fn scroll_at(&mut self, column: u16, row: u16, delta: isize) {
+        let pane = self.pane_at(column, row).unwrap_or(self.focus);
+        self.move_in(pane, delta);
     }
 
     /// Cycles repeat: off → all → one → off.
@@ -713,14 +822,13 @@ impl App {
 
 const SHUFFLE_SETTING: &str = "shuffle";
 const REPEAT_SETTING: &str = "repeat";
-const BROWSER_WIDTH_SETTING: &str = "browser_width";
-const DEFAULT_BROWSER_WIDTH: u16 = 62;
-/// Neither panel can be squeezed below a fifth of the width.
-const BROWSER_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 20..=80;
-
-fn clamp_browser_width(width: u16) -> u16 {
-    width.clamp(*BROWSER_WIDTH_RANGE.start(), *BROWSER_WIDTH_RANGE.end())
-}
+const SIDEBAR_WIDTH_SETTING: &str = "sidebar_width";
+const RIGHT_WIDTH_SETTING: &str = "right_width";
+const DEFAULT_SIDEBAR_WIDTH: u16 = 20;
+const DEFAULT_RIGHT_WIDTH: u16 = 30;
+const SIDEBAR_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 10..=40;
+const RIGHT_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 15..=50;
+const MIN_SONGS_WIDTH: u16 = 25;
 
 /// Identifies a queue item; the entry id tells apart repeats of a track within a playlist.
 fn queue_key(t: &Track) -> (i64, Option<i64>) {
@@ -744,7 +852,6 @@ fn added_message(added: usize, requested: usize, playlist: &str) -> String {
 
 pub fn location_name(location: &Location) -> &str {
     match location {
-        Location::Root => "foldly",
         Location::AllTracks => "All Tracks",
         Location::Playlist { name, .. } => name,
     }
@@ -840,16 +947,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        // Top level: All Tracks with 3 tracks, no playlists yet.
-        assert!(matches!(app.entry(0), Some(Entry::Folder { location: Location::AllTracks, count: 3 })));
-        assert_eq!(app.visible.len(), 1);
+        // The sidebar starts with just All Tracks, shown in the songs list, which has focus.
+        assert_eq!(app.sidebar.len(), 1);
+        assert_eq!((app.location.clone(), app.sidebar[0].count, app.visible.len()), (Location::AllTracks, 3, 3));
+        assert_eq!(app.focus, Pane::Songs);
 
-        // Into All Tracks, filter to Tone 3, add it to a new playlist.
-        app.activate_selected();
-        assert_eq!(app.location, Location::AllTracks);
+        // Filter to Tone 3 and add it to a new playlist; the songs list stays on All Tracks.
         app.set_filter("tone 3".into());
-        assert_eq!(app.visible.len(), 2, "parent + one match");
-        app.select(1);
+        assert_eq!(app.visible.len(), 1);
         app.start_add_to_playlist();
         app.confirm_pick(); // item 0: new playlist
         app.mode = Mode::Input {
@@ -857,10 +962,12 @@ mod tests {
             text: "Mix".into(),
         };
         app.submit_input();
+        assert_eq!(app.message.as_deref(), Some("added 1 track to Mix"));
+        assert_eq!((app.sidebar.len(), app.location.clone()), (2, Location::AllTracks));
         app.set_filter(String::new());
 
         // Add Tone 1 too, via the picker's existing playlist row.
-        app.select(1);
+        app.select(0);
         app.start_add_to_playlist();
         if let Mode::PickPlaylist { state, .. } = &mut app.mode {
             state.select(Some(1));
@@ -883,25 +990,52 @@ mod tests {
         assert_eq!(app.message.as_deref(), Some("added 1 track to Mix (2 already there)"));
         app.set_filter(String::new());
 
-        // Back up: the playlist is a folder, and going up reselects All Tracks.
-        app.go_up();
-        assert_eq!(app.list_state.selected(), Some(0));
-        assert!(matches!(app.entry(1), Some(Entry::Folder { location: Location::Playlist { .. }, count: 3 })));
-
-        // Open it, move Tone 1 above Tone 3, and play from the top.
-        app.select(1);
+        // Moving through the sidebar previews each source; Enter moves into its songs.
+        let titles =
+            |app: &App| -> Vec<String> { (0..app.visible.len()).filter_map(|i| app.track(i)?.title.clone()).collect() };
+        app.focus_pane(Pane::Sidebar);
+        app.move_selection(1);
+        assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Mix"));
+        assert_eq!(app.sidebar[1].count, 3);
+        assert_eq!(titles(&app), ["Tone 3", "Tone 1", "Tone 2"], "playlist order");
+        app.move_selection(-1);
+        assert_eq!(app.location, Location::AllTracks);
+        app.move_selection(1);
         app.activate_selected();
-        app.select(2);
-        app.move_entry(-1);
-        let titles: Vec<_> = (1..3)
-            .filter_map(|i| match app.entry(i) {
-                Some(Entry::Track(t)) => t.title.clone(),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(titles, ["Tone 1", "Tone 3"]);
+        assert_eq!(app.focus, Pane::Songs);
 
+        // Move Tone 1 above Tone 3.
         app.select(1);
+        app.move_entry(-1);
+        assert_eq!(titles(&app), ["Tone 1", "Tone 3", "Tone 2"]);
+
+        // Rename the playlist from the songs list; the sidebar and title follow.
+        app.start_rename();
+        if let Mode::Input { text, .. } = &mut app.mode {
+            *text = "Mix 2".into();
+        }
+        app.submit_input();
+        assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Mix 2"));
+        assert!(matches!(&app.sidebar[1].location, Location::Playlist { name, .. } if name == "Mix 2"));
+
+        // A new empty playlist is shown straight away; deleting it from the sidebar falls back to
+        // the playlist now in its place.
+        app.start_new_playlist();
+        if let Mode::Input { text, .. } = &mut app.mode {
+            *text = "Empty".into();
+        }
+        app.submit_input();
+        assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Empty"));
+        assert_eq!((app.sidebar.len(), app.visible.len()), (3, 0));
+        app.focus_pane(Pane::Sidebar);
+        app.delete_selected();
+        assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
+        app.confirm_delete();
+        assert_eq!(app.sidebar.len(), 2);
+        assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Mix 2"));
+        app.focus_pane(Pane::Songs);
+
+        app.select(0);
         app.activate_selected();
         assert_eq!(app.now_playing.as_ref().unwrap().title.as_deref(), Some("Tone 1"));
         app.player.seek_by(2);
@@ -995,33 +1129,51 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         assert!(app.player.position() > after, "playing again on the new device");
 
-        // Resizing: drag the divider (saved on release), use < and >, clamp, and reload.
+        // Mouse and resizing at 100 columns: sidebar 20%, songs the rest, right column 30%.
         let render = |app: &mut App| {
             let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
             terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
             format!("{}", terminal.backend())
         };
         render(&mut app);
-        assert_eq!((app.browser_width, app.divider_x), (62, 62));
-        app.mouse_down(30, 2);
-        app.mouse_drag(50);
-        assert_eq!(app.browser_width, 62, "a click away from the divider doesn't drag");
-        app.mouse_down(62, 2);
-        app.mouse_drag(40);
-        assert_eq!(app.browser_width, 40);
-        assert_eq!(db::get_setting(&app.conn, "browser_width").unwrap(), None, "not saved mid-drag");
+        assert_eq!((app.panes.sidebar.width, app.panes.songs.x, app.panes.right.x), (20, 20, 70));
+
+        // Clicking a sidebar row focuses the sidebar and shows that source; the wheel scrolls
+        // the pane under the pointer; clicking a song selects it.
+        app.mouse_down(5, 1);
+        assert_eq!((app.focus, app.location.clone()), (Pane::Sidebar, Location::AllTracks));
+        app.scroll_at(5, 3, 3);
+        assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Mix 2"), "clamped to the last");
+        app.mouse_down(40, 2);
+        assert_eq!((app.focus, app.list_state.selected()), (Pane::Songs, Some(1)));
+        app.mouse_drag(60);
+        assert_eq!(app.sidebar_width, 20, "a click away from the dividers doesn't drag");
+
+        // Drag both dividers; nothing is saved until the button is released.
+        app.mouse_down(20, 2);
+        app.mouse_drag(30);
+        assert_eq!(app.sidebar_width, 30);
+        assert_eq!(db::get_setting(&app.conn, "sidebar_width").unwrap(), None, "not saved mid-drag");
         app.mouse_up();
-        assert_eq!(db::get_setting(&app.conn, "browser_width").unwrap().as_deref(), Some("40"));
+        assert_eq!(db::get_setting(&app.conn, "sidebar_width").unwrap().as_deref(), Some("30"));
+        app.mouse_down(70, 2);
+        app.mouse_drag(60);
+        app.mouse_up();
+        assert_eq!(app.right_width, 40);
         render(&mut app);
-        assert_eq!(app.divider_x, 40, "the queue now starts where it was dropped");
-        app.resize_browser(2);
-        assert_eq!(app.browser_width, 42);
-        app.resize_browser(-100);
-        assert_eq!(app.browser_width, 20, "clamped");
-        app.resize_browser(10);
+        assert_eq!((app.panes.songs.x, app.panes.right.x), (30, 60), "columns follow the drops");
+
+        // < and > move the divider right of the focused pane; the songs list keeps its minimum.
+        app.focus_pane(Pane::Songs);
+        app.resize_focused(2);
+        assert_eq!(app.right_width, 38);
+        app.focus_pane(Pane::Sidebar);
+        app.resize_focused(100);
+        assert_eq!(app.sidebar_width, 37, "clamped so the songs list keeps 25%");
         let reopened = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
-        assert_eq!(reopened.browser_width, 30, "remembered");
+        assert_eq!((reopened.sidebar_width, reopened.right_width), (37, 38), "remembered");
         drop(reopened);
+        app.focus_pane(Pane::Songs);
         println!("{}", render(&mut app));
 
         // Help fits a normal terminal; on a short one it scrolls, stopping at the last line.

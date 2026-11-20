@@ -29,8 +29,11 @@ truth for state — this file plus `git log` is all that is needed to resume.
   watched (notify) and rescanned automatically once changes settle (item I);
   audio stream errors no longer print over the TUI, and a lost output device
   is reopened with the track resumed; `Ctrl-L` redraws; the queue panel
-  scrolls only when needed; the browser/queue split is resizable (`<`/`>`
-  or mouse drag) and saved in `settings`. Tree green, 10 tests + 2 ignored end-to-end tests
+  scrolls only when needed; three columns (sidebar of sources | songs |
+  queue) with focus switching, resizable (`<`/`>` or mouse drag) and saved
+  in `settings`. In progress: an info pane above the queue for the selected
+  song (step 2, stored data + "also in"; step 3, extra tags + a one-time
+  rescan). Tree green, 10 tests + 2 ignored end-to-end tests
   (need audio; see *Verification*). Reconnecting is tested by injecting
   errors, not by a real device switch. Docs split into README
   (users), this file (state), IMPLEMENTATION.md (internals).
@@ -55,11 +58,12 @@ from its scope note alone, without re-deriving context.
       arrive on another thread: forward them through an `mpsc` channel
       drained in `App::tick`, like `ScanEvent`. macOS needs a run loop on
       the main thread for callbacks; check souvlaki's docs for TUI apps.
-- [ ] **C. Artist and Album virtual folders** (medium). Add `Artists/` and
-      `Albums/` beside `All Tracks/` (new `Location` variants), built from
-      `SELECT DISTINCT` over tags; inside, the artist's albums or the
-      album's tracks. Then make `a`/`A` on a folder entry add all its tracks
-      (exact, unlike filter + `A`). Untagged tracks go in "Unknown".
+- [ ] **C. Artists and Albums in the sidebar** (medium). Add sidebar items
+      for each artist and album (new `Location` variants, `SELECT DISTINCT`
+      over tags), perhaps under collapsible "Artists" / "Albums" headings;
+      an artist shows all their songs grouped by album. `A` from the sidebar
+      then adds an exact artist/album (unlike filter + `A`). Untagged tracks
+      go in "Unknown".
 - [ ] **D. Interactive queue panel** (medium). `Tab` focuses the queue; while
       focused, `j`/`k` move, `Enter` jumps to a track, `d` removes it,
       `J`/`K` reorder, `c` clears upcoming. Needs a focus field on `App`,
@@ -73,7 +77,7 @@ from its scope note alone, without re-deriving context.
 - [ ] **F. Mark tracks** (small). `m` toggles a mark on the selected track,
       `*` marks everything shown, `M` clears marks; `a` adds the marked
       tracks when any are marked. Marks are a `HashSet<(track id, entry id)>`
-      cleared on navigation; draw a marker column in the browser.
+      cleared on navigation; draw a marker column in the songs list.
 - [ ] **G. Gapless playback** (small-medium). Near the end of a track, append
       the next decoder to the same rodio `Player` instead of replacing the
       player; advance `queue_index` when `Player::len()` drops. Interacts with
@@ -94,7 +98,7 @@ from its scope note alone, without re-deriving context.
       repairs the screen. If it happens often, redirect stderr (fd 2) to a
       log file while the TUI is up.
 - [ ] **L. Track durations in lists** (tiny). Right-align `mm:ss` in the
-      browser and queue rows; durations are already in `Track::duration`.
+      songs and queue rows; durations are already in `Track::duration`.
 - [ ] **M. Cover art** (medium). Show embedded art (lofty) or `cover.jpg` in a
       corner of the queue panel with `ratatui-image` (kitty/sixel/iTerm
       protocols, halfblocks fallback).
@@ -105,16 +109,16 @@ from its scope note alone, without re-deriving context.
 - [ ] **P. Config file** (medium). Keybindings, colours, seek step, start
       view, in `dirs::config_dir()/foldly/config.toml`.
 - [ ] **Q. Mouse clicks** (small). Mouse capture is on for divider dragging;
-      clicking a row could select it (double-click to play), and clicking
-      the progress bar could seek. Hit-test with the rects `ui::draw`
-      already records (extend `App::panels` with the transport area).
+      clicking already focuses and selects; double-click could play, and
+      clicking the progress bar could seek. Hit-test with the rects
+      `ui::draw` already records (extend `App::panes` with the transport).
 - [ ] **Nits** (tiny, do whenever):
   - A file that fails to decode sets the message line, but `play_index`
     clears it when the next track starts, so the skip is invisible. Keep the
     message when a skip happened.
   - Repeat-all with shuffle reshuffles from a random first track, which can
     be the track that just finished.
-  - The browser marks every row of the playing track with ♪, so a track
+  - The songs list marks every row of the playing track with ♪, so a track
     listed twice in a playlist shows two.
   - Progress events trigger a full `reload` of the current list every 200
     files; fine so far, but rebuilds every filter haystack each time.
@@ -197,7 +201,7 @@ Requires Rust stable (edition 2024). Linux needs `libasound2-dev`.
   settle timer. Unit tests at the bottom.
 - `src/filter.rs` — fuzzy filter over nucleo. Unit tests at the bottom.
 - `src/player.rs` — audio output: one rodio `Player` per track.
-- `src/ui.rs` — all drawing: browser, queue, transport, status line, popups,
+- `src/ui.rs` — all drawing: sidebar, songs, queue, transport, status line, popups,
   and the `HELP` key table.
 - `install.sh` — the curl installer (POSIX sh).
 - `.github/workflows/release.yml` — release builds on `v*` tags.

@@ -3,8 +3,9 @@
 A terminal music player for one big music folder.
 
 foldly plays the music files you already own, all kept in a single folder. It scans that folder
-into a small local database and lets you browse it as virtual folders: `All Tracks/`, plus one
-folder per playlist. It never writes to your music files, and nothing leaves your machine.
+into a small local database and shows it in three columns: a sidebar with `All Tracks` and your
+playlists, the songs of whichever one is selected, and the play queue. It never writes to your
+music files, and nothing leaves your machine.
 
 ## Install
 
@@ -54,11 +55,12 @@ usual. Inside foldly, press `?` for every key.
 
 | Key | Action |
 |-----|--------|
-| `↑`/`↓`, `j`/`k` | Move the selection (`PgUp`/`PgDn` by 10, `g`/`G` to top/bottom) |
-| `Enter`/`l` | Open a folder, or play a track and queue the rest of the list |
-| `Backspace`/`h` | Back to the top level |
-| `<` / `>` | Narrow / widen the browser (or drag the divider with the mouse) |
-| `/` | Fuzzy filter the current list; `Enter` plays the top match, `Esc` clears |
+| `↑`/`↓`, `j`/`k` | Move the selection in the focused pane (`PgUp`/`PgDn` by 10, `g`/`G` to top/bottom) |
+| `Tab` | Switch focus between the sidebar and the songs list |
+| `Enter`/`l` | Sidebar: go to its songs. Songs: play the track and queue the rest of the list |
+| `Backspace`/`h` | Back to the sidebar |
+| `<` / `>` | Move the divider to the right of the focused pane (or drag dividers with the mouse) |
+| `/` | Fuzzy filter the songs list; `Enter` plays the top match, `Esc` clears |
 | `Space` | Pause / resume |
 | `n` / `p` | Next / previous track |
 | `←` / `→` | Seek 5 seconds |
@@ -69,17 +71,21 @@ usual. Inside foldly, press `?` for every key.
 | `a` | Add the selected track to a playlist |
 | `A` | Add every track shown to a playlist |
 | `N` | New playlist |
-| `R` | Rename a playlist |
-| `d` | Remove a track from this playlist, or delete the selected playlist |
+| `R` | Rename the playlist being shown |
+| `d` | Songs: remove the track from this playlist. Sidebar: delete the playlist |
 | `J` / `K` | Move a track down / up in a playlist |
 | `u` | Rescan now (changes are picked up automatically) |
 | `?` | Help: every key, explained |
 | `Ctrl-L` | Redraw the screen |
 | `q` | Quit |
 
-### Virtual folders
+### Sidebar and songs
 
-The top level shows `All Tracks/` and one folder per playlist, each with its track count.
+The sidebar lists `All Tracks` and every playlist, each with its track count. Whatever is
+selected in the sidebar is shown in the songs list, so moving through the sidebar previews each
+playlist as you go. Focus starts in the songs list; `Tab`, `h`/`l`, `Enter` or a mouse click
+move it, and the focused pane has a coloured border.
+
 `All Tracks` lists everything as "Artist — Title", ordered by artist, album, disc and track
 number; files without tags show their file name. Playlists list their tracks in playlist order.
 
@@ -90,7 +96,7 @@ tree: playlists are how you organise.
 
 foldly scans the music folder in the background when it starts, and watches it while it runs:
 add, remove or rename music (files or whole folders) and foldly rescans two seconds after the
-changes stop, so copying in an album triggers one scan. The browser's border shows progress, and
+changes stop, so copying in an album triggers one scan. The songs list's border shows progress, and
 the bottom line reports what changed. `u` rescans by hand, e.g. if watching couldn't start (foldly
 says so on startup).
 
@@ -105,9 +111,9 @@ up; hidden files and folders are skipped. Changes to other files, like cover art
 - `A` does the same for every track in the current list, which is usually a filter result. The
   picker title shows how many tracks will be added, and tracks already in the playlist are
   skipped, so re-running "add everything by this artist" only adds new songs.
-- Inside a playlist, `d` removes the selected track and `J`/`K` move it. At the top level, `d`
-  deletes the selected playlist after a `y`/`n` confirmation. Your files are never touched.
-- `N` creates an empty playlist; `R` renames the selected playlist, or the one you're in.
+- In a playlist's songs, `d` removes the selected track and `J`/`K` move it. In the sidebar,
+  `d` deletes the selected playlist after a `y`/`n` confirmation. Your files are never touched.
+- `N` creates an empty playlist and shows it; `R` renames the playlist being shown.
 
 A playlist can hold the same track more than once (with `a`).
 
@@ -161,11 +167,14 @@ there)", or an error such as a file that couldn't be decoded), replacing the key
 next key press. If the music folder or database can't be opened, foldly prints the error to the
 terminal and exits.
 
-### Panel sizes
+### Panel sizes and the mouse
 
-The browser and the queue share the width. Drag the border between them with the mouse, or press
-`<` and `>`; neither panel goes below a fifth of the width. The split is saved and restored next
-time. The mouse wheel moves the selection.
+Drag either border between the three columns with the mouse, or press `<` and `>` to move the
+border on the right of the focused pane. The songs list always keeps at least a quarter of the
+width. Sizes are saved and restored next time.
+
+Clicking a pane focuses it and selects the row under the pointer; the wheel scrolls the pane it's
+over.
 
 Because foldly uses the mouse, selecting text on screen needs a modifier in most terminals:
 Shift-drag (or Option-drag in macOS Terminal and iTerm2).
@@ -209,7 +218,7 @@ CREATE TABLE playlist_tracks (
 );
 
 CREATE TABLE settings (
-    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat, browser_width
+    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat, sidebar_width, right_width
     value TEXT NOT NULL
 );
 ```

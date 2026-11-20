@@ -21,7 +21,7 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 
-use app::{App, Mode};
+use app::{App, Mode, Pane};
 use player::Player;
 
 const ROOT_SETTING: &str = "music_root";
@@ -199,7 +199,7 @@ fn handle_mouse(app: &mut App, mouse: MouseEvent) {
         MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
             let down = mouse.kind == MouseEventKind::ScrollDown;
             match &mut app.mode {
-                Mode::Normal | Mode::Filter => app.move_selection(if down { 3 } else { -3 }),
+                Mode::Normal | Mode::Filter => app.scroll_at(mouse.column, mouse.row, if down { 3 } else { -3 }),
                 Mode::Help { scroll } => {
                     *scroll = if down { scroll.saturating_add(3) } else { scroll.saturating_sub(3) }
                 }
@@ -223,10 +223,15 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
         KeyCode::Home | KeyCode::Char('g') => app.select_first(),
         KeyCode::End | KeyCode::Char('G') => app.select_last(),
         KeyCode::Enter | KeyCode::Char('l') => app.activate_selected(),
-        KeyCode::Backspace | KeyCode::Char('h') => app.go_up(),
-        KeyCode::Char('<') => app.resize_browser(-2),
-        KeyCode::Char('>') => app.resize_browser(2),
-        KeyCode::Char('/') => app.mode = Mode::Filter,
+        KeyCode::Tab => app.toggle_focus(),
+        KeyCode::Backspace | KeyCode::Char('h') => app.focus_pane(Pane::Sidebar),
+        KeyCode::Char('<') => app.resize_focused(-2),
+        KeyCode::Char('>') => app.resize_focused(2),
+        KeyCode::Char('/') => {
+            // The filter always works on the songs list.
+            app.focus_pane(Pane::Songs);
+            app.mode = Mode::Filter;
+        }
 
         KeyCode::Char(' ') => app.player.toggle_pause(),
         KeyCode::Char('n') => app.next(),

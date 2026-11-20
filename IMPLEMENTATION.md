@@ -21,7 +21,7 @@ main.rs        args → music root → Player + App → loop: tick → draw → 
        ├─ Watch   folder watcher (notify) → "rescan due"        (watch.rs)
        ├─ Filter  fuzzy matcher (nucleo)                        (filter.rs)
        └─ Player  rodio output device + current track           (player.rs)
-ui.rs          draw(frame, &mut App): browser, queue, transport, status, popups
+ui.rs          draw(frame, &mut App): sidebar | songs | queue, transport, status, popups
 ```
 
 The loop runs at ~5 fps: `event::poll` times out after 200 ms so the progress
@@ -31,8 +31,9 @@ when a track ends and drains scan events, then draws, then handles at most one
 key. Only key *press* events are handled.
 
 Data flow per frame is **state → pixels**: `ui::draw` reads `App` and never
-touches the db. It takes `&mut App` only for widget state (the browser's
-`ListState` scroll offset, and clamping the help popup's scroll).
+touches the db. It takes `&mut App` only for widget state (the lists'
+`ListState` scroll offsets, clamping the help popup's scroll, and recording
+the column rects in `App::panes` for the mouse).
 
 ## Module map
 
@@ -74,7 +75,7 @@ Four tables; see README.md for the full DDL.
   own. Order is `position`, then `id`. Both foreign keys cascade
   (`PRAGMA foreign_keys` is on).
 - `settings` — key/value: `music_root`, `shuffle` (`"1"`/`"0"`), `repeat`
-  (`off`/`all`/`one`), `browser_width` (percent, 20–80).
+  (`off`/`all`/`one`), `sidebar_width` and `right_width` (percent).
 
 ### Missing, not deleted
 
@@ -124,7 +125,7 @@ overrides the path; tests pass a temp path (or `:memory:`) directly to
 5. Sends `Finished { changed, missing }`, or `Failed` on any error.
 
 `App::poll_scan` (called from `tick`) drains the channel without blocking,
-updates `scan_status` (drawn in the browser's top-right border), reloads the
+updates `scan_status` (drawn in the songs list's top-right border), reloads the
 current list after progress, and drops the receiver when the scan ends.
 
 ### Watching (`watch.rs`)
@@ -162,32 +163,49 @@ decoder gets a chance at playback.
 ```rust
 pub struct App {
     root, db_path, conn,              // music folder, db path (for the scanner), UI connection
-    location: Location,               // Root | AllTracks | Playlist { id, name }
-    entries: Vec<Entry>,              // Parent | Folder { location, count } | Track(Track)
-    haystacks: Vec<Utf32String>,      // filter text, one per entry
+    focus: Pane,                      // Sidebar | Songs: which pane keys act on
+    sidebar: Vec<SidebarItem>,        // All Tracks, then playlists, each with a count
+    sidebar_state: ListState,
+    location: Location,               // AllTracks | Playlist { id, name }: the sidebar's selection
+    tracks: Vec<Track>,               // the songs of `location`
+    haystacks: Vec<Utf32String>,      // filter text, one per track
     fuzzy: Filter,
-    visible: Vec<usize>,              // indices into entries, in display order
+    visible: Vec<usize>,              // indices into tracks, in display order
     filter: String,
-    list_state: ListState,            // selection is an index into `visible`
+    list_state: ListState,            // songs selection, an index into `visible`
     mode: Mode,                       // which prompt/popup is open
+    sidebar_width, right_width,       // column widths in percent; songs get the rest
+    panes: PaneRects, dragging,       // last frame's column rects; the divider being dragged
     queue, queue_index, unshuffled,   // see "Queue" below
     shuffle, repeat, now_playing, player,
     message, scan_status, scan_rx, should_quit,
 }
 ```
 
-**The UI mirrors the db.** `load_entries(location)` queries the db and
-`set_entries` stores the result together with the haystacks; `reload` re-runs
-it for the current location after any change (playlist edits, scan progress).
-Draw code only reads these fields.
+**The UI mirrors the db.** `load_sidebar` and `load_tracks(location)` query
+the db; `set_tracks` stores the songs together with their haystacks. `reload`
+re-reads both after any change (playlist edits, scan progress) and keeps both
+selections: the sidebar finds the shown source again by identity
+(`Location::same_source`, which ignores a playlist's name so renames are
+picked up), and if it was deleted, shows the source now at its position. Draw
+code only reads these fields.
 
-### Virtual folders and navigation
+### Sidebar, songs and focus
 
-`Location` is the "folder" being shown. `Root` lists an `All Tracks` folder and
-one folder per playlist; the others list a `Parent` (`../`) entry followed by
-tracks. `navigate(location)` clears the filter, loads the new entries, and
-picks the selection: going up to `Root` selects the folder you came from,
-going down selects the first track.
+**The sidebar's selection is always the source the songs list shows.** Moving
+in the sidebar calls `select_source`, which (when the index changes) runs
+`show_source`: set `location`, clear the filter, load its tracks, select the
+first. That's the instant preview; it's a single indexed query, cheap even for
+All Tracks.
+
+`focus: Pane` decides what keys act on. `move_selection`, `select_first`/`last`
+dispatch on it (`move_in` takes the pane explicitly, for the mouse wheel).
+`Enter` in the sidebar only moves focus to the songs list; in the songs list it
+plays. Pane-dependent actions read `focus`: `d` deletes the playlist from the
+sidebar and removes an entry from the songs list; `a` and `J`/`K` need the
+songs list. `R` and `A` work from either, since both panes refer to the same
+`location`. `/` always focuses the songs list. A new empty playlist (`N`) is
+shown immediately by setting `location` before `reload`.
 
 Track identity within a list is `(track id, entry id)` (`queue_key`): the entry
 id is `None` in All Tracks and the `playlist_tracks.id` inside a playlist,
@@ -195,17 +213,14 @@ which is what distinguishes two occurrences of the same song.
 
 ### Filtering
 
-`set_entries` precomputes one haystack per entry: `"<label> <album>"` for
-tracks (label is "Artist — Title" or the file stem), the name for folders,
-empty for `Parent`. `apply_filter` then:
+`set_tracks` precomputes one haystack per track: `"<label> <album>"` (label
+is "Artist — Title" or the file stem). `apply_filter` then shows everything
+for an empty filter, else runs `Filter::matches`, ranked by score in
+`AllTracks` and in original order in playlists (so a filtered playlist still
+reads as the playlist). The filter only ever applies to the songs list.
 
-- with an empty filter, shows everything;
-- otherwise keeps `Parent` pinned at the top and runs `Filter::matches` over
-  the rest, ranked by score in `AllTracks` and in original order elsewhere
-  (so a filtered playlist still reads as the playlist).
-
-`set_filter` also selects the first non-`Parent` row, so `Enter` from filter
-mode plays the best match (filter mode hands `Enter`/`↑`/`↓` to
+`set_filter` also selects the first row, so `Enter` from filter mode plays the
+best match (filter mode hands `Enter`/`↑`/`↓` to
 `handle_normal_key` after leaving the mode). `move_entry` refuses to reorder
 while filtering, since neighbours in the filtered view aren't neighbours in the
 playlist.
@@ -332,16 +347,20 @@ library may have printed. `Ctrl-L` sets the same flag.
 
 ### Layout
 
-`draw` splits the frame into: the main area (browser `browser_width`% |
-queue the rest), the transport (3 rows), and the status line (1 row). It
-records the main area (`App::panels`) and the queue's x (`App::divider_x`)
-for mouse hit-testing, one of the two things draw writes to `App`. Popups draw last, centred,
-over a `Clear`.
+`draw` splits the frame into: the main area (sidebar `sidebar_width`% |
+songs `Fill` | right column `right_width`%), the transport (3 rows), and the
+status line (1 row), and records the three column rects in `App::panes` for
+mouse hit-testing. Popups draw last, centred, over a `Clear`.
 
-- **Browser** — a `List` with `▌` as the highlight symbol. The border title is
-  the location (`~`-shortened root at the top level); scan progress goes in a
-  right-aligned top title. Rows: dimmed `../`, cyan `Folder/` with a dimmed
-  count, `♪` green bold for the playing track, dimmed `(missing)` tracks.
+`pane_styles` gives the focused pane an accent border and a filled selection;
+the other keeps a bold-only selection, so both selections stay visible.
+
+- **Sidebar** — titled ` Library `, with the `~`-shortened music root in the
+  bottom border. Rows are the source name (All Tracks bold) with its count
+  right-aligned (the row width is the inner width minus the highlight symbol).
+- **Songs** — a `List` with `▌` as the highlight symbol, titled with the
+  source's name; scan progress goes in a right-aligned top title. `♪` green
+  bold marks the playing track, dimmed `(missing)` tracks.
 - **Queue** — titled `Queue i/n`; played tracks dimmed, the current one green.
   `queue_window_start` picks the first row: 0 until the current track nears
   the bottom, then scrolled to keep `rows / 3` (at most `MAX_LOOKAHEAD`, 5)
@@ -353,28 +372,34 @@ over a `Clear`.
   playing" costs no extra rows. The label shows state icon, time, volume,
   `shuffle` and `repeat all|one`.
 - **Status line** — the filter prompt while typing, else `message`, else an
-  active-filter reminder, else per-location key hints ending in `? help`.
+  active-filter reminder, else key hints for the focused pane and source,
+  ending in `? help`.
 
 ### Resizing and the mouse
 
-`browser_width` (default 62, clamped to 20–80 by `clamp_browser_width`) is
-loaded from `settings` in `App::new`. `<`/`>` call `resize_browser(∓2)`,
-which saves immediately.
+`sidebar_width` (default 20, range 10–40) and `right_width` (default 30, range
+15–50) are loaded from `settings` in `App::new`. `clamp_widths(moved)` applies
+the ranges and keeps the songs list at least `MIN_SONGS_WIDTH` (25%): when the
+side columns don't fit, the one beside the divider that moved gives way. `<`/`>`
+call `resize_focused(∓2)`, which moves the divider on the right of the focused
+pane (sidebar|songs, or songs|right) and saves immediately.
 
 `main.rs` enables crossterm mouse capture after `ratatui::init` and disables
 it before `ratatui::restore`; a panic hook wrapping ratatui's own does the
 same, since ratatui's hook doesn't know about mouse capture. `handle_mouse`
 routes left down/drag/up to `App::mouse_down`/`mouse_drag`/`mouse_up`:
 
-- down starts a drag only on the divider (the queue's left border or the
-  browser's right border, inside `panels`);
-- drag sets the width so the queue's left border sits under the pointer
+- down on a divider (either border of the pair, at `panes.songs.x` or
+  `panes.right.x`) grabs it as `dragging`; anywhere else in the sidebar or
+  songs it focuses that pane and selects the clicked row (`offset` from the
+  list's `ListState`, minus the top border);
+- drag sets the grabbed column's width so the border sits under the pointer
   (rounded to the nearest percent), without saving;
 - up saves, so a drag costs one db write.
 
 Mouse capture stops terminals from translating the wheel into arrow keys in
-the alternate screen, so the wheel is handled explicitly: it moves the
-selection by 3 (or scrolls the help popup).
+the alternate screen, so the wheel is handled explicitly: `scroll_at` moves
+the selection by 3 in the pane under the pointer (or scrolls the help popup).
 
 ### Popups
 
@@ -404,11 +429,12 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
 - *app.rs* — `shuffled_from` (chosen first, same tracks once each), plus one
   **ignored end-to-end test** that needs an audio device and `FOLDLY_TEST_DIR`
   (three tagged tones, see DEVELOPMENT.md). It drives `App` directly through
-  scanning, navigation, filtering, the picker, bulk add, reordering,
+  scanning, sidebar previews and focus, filtering, the picker, bulk add,
+  reordering, rename, creating and deleting playlists from the sidebar,
   playback and auto-advance, shuffle on/off, every repeat mode, audio errors
   injected with `Player::inject_error` (ignored vs. reconnect-and-resume),
-  dragging the divider and `<`/`>` (clamping, saved on release, reloaded by a
-  second `App`), and renders
+  clicks and the wheel, dragging both dividers and `<`/`>` (clamping, saved on
+  release, reloaded by a second `App`), and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help
   popup at two heights. A second ignored test, `picks_up_music_added_while_running`,
   runs `App` on a temp copy of the fixtures and checks that a dropped file, an
