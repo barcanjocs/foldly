@@ -1,8 +1,10 @@
 # foldly
 
-A terminal music player for Linux and macOS, built for one big music folder. foldly scans that
-folder into a small SQLite database and shows it as virtual folders: `All Tracks/`, plus one
-folder per playlist. Pressing Enter on a track plays it and queues the rest of that view.
+A terminal music player for one big music folder.
+
+foldly plays the music files you already own, all kept in a single folder. It scans that folder
+into a small local database and lets you browse it as virtual folders: `All Tracks/`, plus one
+folder per playlist. It never writes to your music files, and nothing leaves your machine.
 
 ## Install
 
@@ -10,110 +12,205 @@ folder per playlist. Pressing Enter on a track plays it and queues the rest of t
 curl -fsSL https://raw.githubusercontent.com/barcanjocs/foldly/main/install.sh | sh
 ```
 
-This downloads the latest release for your machine (Linux or macOS, x86_64 or arm64), checks
-its SHA-256 checksum and installs `foldly` to `~/.local/bin`. Set `FOLDLY_INSTALL_DIR` to put it
-elsewhere, or `FOLDLY_VERSION=v0.1.0` for a specific release. Run the same command to update.
+This downloads the latest release for your machine (Linux or macOS, x86_64 or arm64), checks its
+SHA-256 checksum and installs `foldly` to `~/.local/bin`. Run the same command to update.
+
+| Variable | Effect |
+|----------|--------|
+| `FOLDLY_INSTALL_DIR` | Install somewhere other than `~/.local/bin` |
+| `FOLDLY_VERSION` | Install a specific release, e.g. `v0.1.0` |
+
 Binaries are also on the [releases page](https://github.com/barcanjocs/foldly/releases).
-
-Then point it at your music once; the folder is remembered:
-
-```sh
-foldly ~/Music
-```
 
 On Linux, audio goes through ALSA (`libasound2`), which desktop distributions already include.
 
-### From source
+### Building from source
 
 ```sh
 cargo install --git https://github.com/barcanjocs/foldly
 ```
 
-Linux needs the ALSA headers to build: `sudo apt install libasound2-dev` (Debian/Ubuntu) or
-`sudo dnf install alsa-lib-devel` (Fedora).
+Requires Rust stable. SQLite is bundled. Linux also needs the ALSA headers:
+`sudo apt install libasound2-dev` (Debian/Ubuntu) or `sudo dnf install alsa-lib-devel` (Fedora).
 
-## Releasing
+## Running
 
-Bump `version` in `Cargo.toml`, commit, then tag and push:
+Point foldly at your music folder once; it is remembered after that:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+foldly ~/Music     # first run, or to switch folders
+foldly             # every run after that
 ```
 
-The release workflow builds and tests all four targets and publishes the release with checksums.
+On first run, a database is created at:
 
-The database lives in your data directory (`~/Library/Application Support/foldly/foldly.db` on
-macOS, `~/.local/share/foldly/foldly.db` on Linux). Set `FOLDLY_DB` to use a different one.
-foldly never writes to your music files.
+- **macOS:** `~/Library/Application Support/foldly/foldly.db`
+- **Linux:** `~/.local/share/foldly/foldly.db`
 
-## Keys
+Set `FOLDLY_DB` to use a different database file. `foldly --help` and `foldly --version` work as
+usual. Inside foldly, press `?` for every key.
+
+## Usage
 
 | Key | Action |
-|---|---|
-| `↑`/`↓`, `j`/`k`, `PgUp`/`PgDn`, `g`/`G` | Move |
-| `Enter`/`l` | Open folder / play track |
+|-----|--------|
+| `↑`/`↓`, `j`/`k` | Move the selection (`PgUp`/`PgDn` by 10, `g`/`G` to top/bottom) |
+| `Enter`/`l` | Open a folder, or play a track and queue the rest of the list |
 | `Backspace`/`h` | Back to the top level |
-| `/` | Fuzzy filter the current view; `Enter` plays the top match, `Esc` clears |
+| `/` | Fuzzy filter the current list; `Enter` plays the top match, `Esc` clears |
 | `Space` | Pause / resume |
-| `n` / `p` | Next / previous (previous restarts the track after 3s) |
-| `←` / `→` | Seek 5s |
+| `n` / `p` | Next / previous track |
+| `←` / `→` | Seek 5 seconds |
 | `+` / `-` | Volume |
+| `z` | Shuffle on / off |
+| `r` | Repeat: off → all → one |
 | `s` | Stop |
-| `z` | Shuffle on/off (remembered); the current track keeps playing |
-| `r` | Repeat: off → all → one (remembered) |
 | `a` | Add the selected track to a playlist |
-| `A` | Add every track shown (e.g. after filtering) to a playlist; tracks already in it are skipped |
+| `A` | Add every track shown to a playlist |
 | `N` | New playlist |
-| `R` | Rename playlist |
-| `d` | Remove track from this playlist / delete the selected playlist |
+| `R` | Rename a playlist |
+| `d` | Remove a track from this playlist, or delete the selected playlist |
 | `J` / `K` | Move a track down / up in a playlist |
 | `u` | Rescan (update) the music folder |
 | `?` | Help: every key, explained |
 | `q` | Quit |
 
-Formats: MP3, FLAC, OGG Vorbis, WAV, M4A (AAC).
+### Virtual folders
 
-## Filtering
+The top level shows `All Tracks/` and one folder per playlist, each with its track count.
+`All Tracks` lists everything as "Artist — Title", ordered by artist, album, disc and track
+number; files without tags show their file name. Playlists list their tracks in playlist order.
 
-`/` filters fzf-style over artist, title and album. Each word matches on its own, in any order,
-and fuzzily: `android radio` and `rhpar` both find "Radiohead — Paranoid Android". Accents are
-optional (`beyonce` finds "Beyoncé"). In All Tracks the best matches come first; playlists keep
-their order. To add everything by an artist, filter with `'artist name` (exact) and press `A`.
-fzf's operators also work:
+Subfolders inside your music folder are scanned too, but foldly doesn't show the real folder
+tree: playlists are how you organise.
+
+### Scanning
+
+foldly scans the music folder in the background every time it starts, and when you press `u`.
+The browser's border shows progress. The first scan reads every file's tags; later scans skip
+files whose size and modification time haven't changed, so they are quick. MP3, FLAC, OGG
+Vorbis, WAV and M4A (AAC) files are picked up; hidden files and folders are skipped.
+
+### Playlists
+
+- `a` opens a picker for the selected track: choose a playlist, or "New playlist…" to create one
+  with the track already in it.
+- `A` does the same for every track in the current list, which is usually a filter result. The
+  picker title shows how many tracks will be added, and tracks already in the playlist are
+  skipped, so re-running "add everything by this artist" only adds new songs.
+- Inside a playlist, `d` removes the selected track and `J`/`K` move it. At the top level, `d`
+  deletes the selected playlist after a `y`/`n` confirmation. Your files are never touched.
+- `N` creates an empty playlist; `R` renames the selected playlist, or the one you're in.
+
+A playlist can hold the same track more than once (with `a`).
+
+### Filtering
+
+`/` filters the current list as you type, matching artist, title and album. Each word matches on
+its own, in any order, and fuzzily: `android radio` and `rhpar` both find "Radiohead — Paranoid
+Android". Accents are optional (`beyonce` finds "Beyoncé"). The best match is selected as you
+type, so `/` + a few letters + `Enter` plays it.
+
+In `All Tracks` the best matches come first; playlists keep their order. For an exact match, or
+to narrow loose results, use fzf's operators:
 
 | Query | Meaning |
-|---|---|
+|-------|---------|
 | `'word` | Exact match |
 | `^word` | Starts with |
 | `word$` | Ends with |
 | `!word` | Exclude |
 
-## Code
+To add everything by an artist to a playlist: `/`, `'artist name`, `Enter`, `A`.
 
-| File | What it does |
-|---|---|
-| `src/main.rs` | Startup, the event loop and key handling |
-| `src/app.rs` | State: where you are, the queue, prompts, playlist actions |
-| `src/db.rs` | SQLite schema and queries for tracks and playlists |
-| `src/scan.rs` | Background scan of the music folder |
-| `src/filter.rs` | Fuzzy filter (nucleo) |
-| `src/player.rs` | Audio output via rodio |
-| `src/ui.rs` | Drawing |
+### Queue, shuffle and repeat
 
-See [PROGRESS.md](PROGRESS.md) for what's done and planned.
+Playing a track queues the rest of the list it came from (the filtered list, if filtering). The
+right-hand panel shows the queue: the last two tracks played (dimmed), the current one (green),
+then what's next. The song playing is shown above the progress bar.
 
-## Tests
+- **Shuffle** (`z`): the chosen track plays first, then the rest in random order. Turning it on
+  mid-song keeps the song playing and shuffles the rest; turning it off returns to the original
+  order from the current song.
+- **Repeat** (`r`): *all* starts the queue again after the last track (reshuffled when shuffle is
+  on), and `p` on the first track wraps to the last. *One* loops the current track; `n` and `p`
+  still move on.
+- `p` restarts the current track if more than 3 seconds have played; otherwise it goes back one.
 
-```sh
-cargo test
+Shuffle and repeat are remembered between runs.
+
+### Missing files
+
+When a file disappears from the music folder, its track drops out of `All Tracks` but stays in
+any playlists, greyed out and marked `(missing)`, so moving files around or unplugging a drive
+doesn't wipe playlists. When the file comes back at the same path, the track is restored.
+Missing tracks are skipped when queueing.
+
+### Messages
+
+The bottom line shows the outcome of the last action (e.g. "added 3 tracks to Mix (20 already
+there)", or an error such as a file that couldn't be decoded), replacing the key hints until the
+next key press. If the music folder or database can't be opened, foldly prints the error to the
+terminal and exits.
+
+## Data
+
+Everything foldly knows lives in one SQLite file. Your music files are only read. The schema:
+
+```sql
+CREATE TABLE tracks (
+    id          INTEGER PRIMARY KEY,
+    rel_path    TEXT NOT NULL UNIQUE,  -- relative to the music folder
+    size        INTEGER NOT NULL,      -- bytes; with mtime, decides whether to re-read tags
+    mtime       INTEGER NOT NULL,      -- seconds since the Unix epoch
+    title       TEXT,
+    artist      TEXT,
+    album       TEXT,
+    track_no    INTEGER,
+    disc_no     INTEGER,
+    duration_ms INTEGER,
+    missing     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE playlists (
+    id   INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE
+);
+
+CREATE TABLE playlist_tracks (
+    id          INTEGER PRIMARY KEY,
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL
+);
+
+CREATE TABLE settings (
+    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat
+    value TEXT NOT NULL
+);
 ```
 
-The end-to-end test needs an audio device and a folder of three short tagged MP3s (titles
-"Tone 1" to "Tone 3", artist "Test Artist"):
+To inspect your data directly:
 
 ```sh
-mkdir -p fixtures
-for i in 1 2 3; do ffmpeg -f lavfi -i "sine=frequency=$((300+i*40)):duration=3" \
-  -metadata title="Tone $i" -metadata artist="Test Artist" -metadata track=$i fixtures/tone$i.mp3; done
-FOLDLY_TEST_DIR=fixtures cargo test -- --ignored
+sqlite3 ~/Library/Application\ Support/foldly/foldly.db \
+  "SELECT p.name, t.artist, t.title FROM playlist_tracks pt
+   JOIN playlists p ON p.id = pt.playlist_id JOIN tracks t ON t.id = pt.track_id
+   ORDER BY p.name, pt.position;"
 ```
+
+## Backing up
+
+Copy the `.db` file. That's every playlist and setting; the tracks table is rebuilt by scanning.
+Playlists refer to files by their path inside the music folder, so they keep working if you move
+the whole folder (start foldly with the new location), but not if you rename files inside it.
+
+## Design principles
+
+- **The music folder is the library; foldly only reads it.** No tag editing, no reorganising,
+  no files written next to your music.
+- **Playlists are the folders.** Organising happens in foldly, not in the file system.
+- **Nothing is deleted by accident.** Vanished files are marked missing, not removed, and
+  deleting a playlist asks first.
+- **Keyboard-first and quick.** Every action is a key or two; the filter finds anything in a
+  large library in a few keystrokes.
