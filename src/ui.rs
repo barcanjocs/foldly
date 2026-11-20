@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Clear, Gauge, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 
 use crate::app::{App, Details, InputPurpose, Location, Mode, Pane, PaneRects, Repeat, location_name};
 
@@ -94,13 +94,46 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_popup(frame, app);
 }
 
-/// A pane's border and selection styles: the focused pane's border is accented and its
-/// selection filled; the other pane keeps a quieter selection so you can see both.
-fn pane_styles(app: &App, pane: Pane) -> (Style, Style) {
+/// A focusable pane's frame and selection style. The focused pane is the only one with a
+/// heavy, accented border and a bold accented title; every other pane's border is dimmed, so
+/// focus is visible even when the pane is empty. Its selection is filled; the other pane keeps a
+/// quieter bold selection so you can see both.
+fn pane_block(app: &App, pane: Pane, title: String) -> (Block<'static>, Style) {
     if app.focus == pane {
-        (Style::new().fg(ACCENT), Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
+        let block = Block::bordered()
+            .border_type(BorderType::Thick)
+            .border_style(Style::new().fg(ACCENT))
+            .title(Line::from(title).bold().fg(ACCENT));
+        (block, Style::new().bg(Color::DarkGray).add_modifier(Modifier::BOLD))
     } else {
-        (Style::new(), Style::new().add_modifier(Modifier::BOLD))
+        (quiet_block(title), Style::new().add_modifier(Modifier::BOLD))
+    }
+}
+
+/// The frame of a pane that isn't focused (or can't be): dimmed border, plain title.
+fn quiet_block(title: impl Into<String>) -> Block<'static> {
+    Block::bordered().border_style(Style::new().dark_gray()).title(Line::from(title.into()).reset())
+}
+
+/// Why the songs list is empty, and what to do about it.
+fn empty_songs_message(app: &App) -> Vec<Line<'static>> {
+    let dim = |s: String| Line::from(s).dark_gray();
+    if !app.filter.is_empty() {
+        return vec![
+            Line::from(format!("No songs match \u{201c}{}\u{201d}.", app.filter)),
+            dim("Esc clears the filter.".into()),
+        ];
+    }
+    match &app.location {
+        Location::Playlist { .. } => vec![
+            Line::from("This playlist is empty."),
+            dim("To add songs, go to All Tracks (or another playlist) and press a for the selected song, or A for every song shown.".into()),
+        ],
+        Location::AllTracks if app.scan_status.is_some() => vec![Line::from("Scanning your music folder…")],
+        Location::AllTracks => vec![
+            Line::from("No music found yet."),
+            dim(format!("Add MP3, FLAC, OGG, WAV or M4A files to {}; foldly picks them up automatically.", display_path(&app.root))),
+        ],
     }
 }
 
@@ -119,11 +152,8 @@ fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
             ListItem::new(Line::from(vec![name, Span::raw(" ".repeat(gap)), Span::raw(count).dark_gray()]))
         })
         .collect();
-    let (border, highlight) = pane_styles(app, Pane::Sidebar);
-    let block = Block::bordered()
-        .border_style(border)
-        .title(" Library ")
-        .title_bottom(Line::from(format!(" {} ", display_path(&app.root))).dark_gray());
+    let (block, highlight) = pane_block(app, Pane::Sidebar, " Library ".into());
+    let block = block.title_bottom(Line::from(format!(" {} ", display_path(&app.root))).dark_gray());
     let list = List::new(items).block(block).highlight_style(highlight).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut app.sidebar_state);
 }
@@ -144,10 +174,14 @@ fn draw_songs(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let (border, highlight) = pane_styles(app, Pane::Songs);
-    let mut block = Block::bordered().border_style(border).title(format!(" {} ", location_name(&app.location)));
+    let (mut block, highlight) = pane_block(app, Pane::Songs, format!(" {} ", location_name(&app.location)));
     if let Some(scan) = &app.scan_status {
         block = block.title_top(Line::from(format!(" {scan} ")).right_aligned().dark_gray());
+    }
+    if items.is_empty() {
+        let message = Paragraph::new(empty_songs_message(app)).wrap(Wrap { trim: true }).block(block);
+        frame.render_widget(message, area);
+        return;
     }
     let list = List::new(items).block(block).highlight_style(highlight).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut app.list_state);
@@ -159,7 +193,7 @@ const INFO_MIN_COLUMN_HEIGHT: u16 = 16;
 
 /// The selected song's details, or a summary of the selected source.
 fn draw_info(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered().title(" Selected ");
+    let block = quiet_block(" Selected ");
     let dim = |s: String| Line::from(s).dark_gray();
     let lines = match &app.details {
         Some(Details::Track { details: d, also_in }) => {
@@ -257,7 +291,7 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
         Some(i) => format!(" Queue {}/{} ", i + 1, app.queue.len()),
         None => " Queue ".to_string(),
     };
-    let block = Block::bordered().title(title);
+    let block = quiet_block(title);
     let Some(current) = app.queue_index else {
         let hint = Line::from("Press Enter on a track to play it and queue the rest of the list.").dark_gray();
         frame.render_widget(Paragraph::new(hint).wrap(ratatui::widgets::Wrap { trim: true }).block(block), area);

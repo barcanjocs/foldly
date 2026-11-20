@@ -85,7 +85,8 @@ usual. Inside foldly, press `?` for every key.
 The sidebar lists `All Tracks` and every playlist, each with its track count. Whatever is
 selected in the sidebar is shown in the songs list, so moving through the sidebar previews each
 playlist as you go. Focus starts in the songs list; `Tab`, `h`/`l`, `Enter` or a mouse click
-move it, and the focused pane has a coloured border.
+move it. The focused pane is the one with the heavy, coloured border (every other border is
+dimmed), and an empty songs list says why it's empty and how to fill it.
 
 `All Tracks` lists everything as "Artist — Title", ordered by artist, album, disc and track
 number; files without tags show their file name. Playlists list their tracks in playlist order.

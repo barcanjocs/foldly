@@ -1141,7 +1141,25 @@ mod tests {
         app.submit_input();
         assert!(matches!(&app.location, Location::Playlist { name, .. } if name == "Empty"));
         assert_eq!((app.sidebar.len(), app.visible.len()), (3, 0));
+        // An empty, focused songs list says why it's empty, and only it has the heavy border.
+        let frame = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 26)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            let top: String = (0..120).map(|x| buffer[(x, 0)].symbol().to_string()).collect();
+            (format!("{}", terminal.backend()), top)
+        };
+        let (screen, top) = frame(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("This playlist is empty."));
+        assert_eq!(top.matches('┏').count(), 1, "one heavy border: {top}");
+        assert!(top.find('┏').unwrap() > top.find('┌').unwrap(), "the songs pane's, not the sidebar's: {top}");
+        app.set_filter("zzz".into());
+        assert!(frame(&mut app).0.contains("No songs match"));
+        app.set_filter(String::new());
         app.focus_pane(Pane::Sidebar);
+        let (_, top) = frame(&mut app);
+        assert!(top.starts_with('┏'), "focus moved to the sidebar: {top}");
         app.delete_selected();
         assert!(matches!(app.mode, Mode::ConfirmDelete { .. }));
         app.confirm_delete();

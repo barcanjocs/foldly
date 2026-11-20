@@ -389,8 +389,17 @@ songs `Fill` | right column `right_width`%), the transport (3 rows), and the
 status line (1 row), and records the three column rects in `App::panes` for
 mouse hit-testing. Popups draw last, centred, over a `Clear`.
 
-`pane_styles` gives the focused pane an accent border and a filled selection;
-the other keeps a bold-only selection, so both selections stay visible.
+`pane_block` frames the two focusable panes. The focused one gets a
+`BorderType::Thick` accent border and a bold accent title, and a filled
+selection; every other pane, focusable or not (info, queue), uses
+`quiet_block`, a dimmed border with a plain title. So exactly one heavy border
+is on screen, which shows focus even when the pane is empty. The unfocused
+focusable pane keeps a bold-only selection so both selections stay visible.
+
+When the songs list has no rows, `draw_songs` renders `empty_songs_message`
+in the block instead of an empty `List`: no filter matches (Esc clears), an
+empty playlist (how to add songs), scanning, or no music found (where to put
+files).
 
 - **Sidebar** — titled ` Library `, with the `~`-shortened music root in the
   bottom border. Rows are the source name (All Tracks bold) with its count
@@ -480,7 +489,8 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   reordering, rename, creating and deleting playlists from the sidebar,
   playback and auto-advance, shuffle on/off, every repeat mode, audio errors
   injected with `Player::inject_error` (ignored vs. reconnect-and-resume),
-  the info pane (track details, "also in" excluding the shown playlist, the
+  focus visibility (exactly one heavy border, on the focused pane, including
+  an empty one) and the empty-list messages, the info pane (track details, "also in" excluding the shown playlist, the
   source summary, hidden on a narrow screen), clicks and the wheel, dragging
   both dividers and `<`/`>` (clamping, saved on
   release, reloaded by a second `App`), and renders
