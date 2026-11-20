@@ -171,27 +171,44 @@ fn draw_info(frame: &mut Frame, app: &App, area: Rect) {
             if let Some(album) = &d.album {
                 lines.push(Line::from(album.as_str()).italic());
             }
-            let numbers: Vec<String> = [
+            if d.missing {
+                lines.push(Line::from("Missing from the music folder").red());
+            }
+            // Most useful first, no spacer lines: the pane is half a column and the end may be cut.
+            let numbers = [
                 d.track_no.map(|n| format!("Track {n}")),
                 d.disc_no.map(|n| format!("Disc {n}")),
                 d.duration.map(fmt_time),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            if !numbers.is_empty() {
-                lines.push(Line::default());
-                lines.push(Line::from(numbers.join(" · ")));
-            }
-            lines.push(Line::default());
-            lines.push(dim(format!("{} · {}", d.rel_path, fmt_size(d.size))));
-            if d.missing {
-                lines.push(Line::from("Missing from the music folder").red());
+            ];
+            let when_what = [d.year.map(|y| y.to_string()), d.genre.clone()];
+            for row in [&numbers[..], &when_what[..]] {
+                let row: Vec<&str> = row.iter().flatten().map(String::as_str).collect();
+                if !row.is_empty() {
+                    lines.push(Line::from(row.join(" · ")));
+                }
             }
             lines.push(match also_in.as_slice() {
                 [] => dim("In no other playlists".into()),
                 names => Line::from(vec![Span::raw("Also in: ").dark_gray(), Span::raw(names.join(", "))]),
             });
+            let quality: Vec<String> = [
+                d.format.clone(),
+                d.bitrate_kbps.map(|b| format!("{b} kbps")),
+                d.sample_rate.map(fmt_sample_rate),
+                d.bit_depth.map(|b| format!("{b}-bit")),
+                d.channels.map(|c| match c {
+                    1 => "mono".to_string(),
+                    2 => "stereo".to_string(),
+                    n => format!("{n} channels"),
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !quality.is_empty() {
+                lines.push(dim(quality.join(" · ")));
+            }
+            lines.push(dim(format!("{} · {}", d.rel_path, fmt_size(d.size))));
             lines
         }
         Some(Details::Source { tracks, duration, unknown, missing }) => {
@@ -211,6 +228,12 @@ fn draw_info(frame: &mut Frame, app: &App, area: Rect) {
         None => vec![dim("Nothing selected".into())],
     };
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }).block(block), area);
+}
+
+/// 44100 → "44.1 kHz", 48000 → "48 kHz".
+fn fmt_sample_rate(hz: u32) -> String {
+    let khz = format!("{:.1}", f64::from(hz) / 1000.0);
+    format!("{} kHz", khz.strip_suffix(".0").unwrap_or(&khz))
 }
 
 fn fmt_size(bytes: i64) -> String {
@@ -436,6 +459,14 @@ fn display_path(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::queue_window_start;
+
+    #[test]
+    fn sample_rates() {
+        assert_eq!(super::fmt_sample_rate(44_100), "44.1 kHz");
+        assert_eq!(super::fmt_sample_rate(48_000), "48 kHz");
+        assert_eq!(super::fmt_sample_rate(96_000), "96 kHz");
+        assert_eq!(super::fmt_sample_rate(22_050), "22.1 kHz");
+    }
 
     #[test]
     fn queue_scrolls_only_when_needed() {

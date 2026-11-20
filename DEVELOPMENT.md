@@ -33,8 +33,10 @@ truth for state — this file plus `git log` is all that is needed to resume.
   queue) with focus switching, resizable (`<`/`>` or mouse drag) and saved
   in `settings`; an info pane above the queue for the selected song (stored
   tags, file, "also in") or the selected source (count, length, missing).
-  In progress: step 3, extra tags (year, genre, format, quality) with a
-  one-time rescan. Tree green, 10 tests + 2 ignored end-to-end tests
+  The info pane also shows year, genre, format and quality, stored by
+  db migration 1 (the first; schema versioning via `user_version`), which
+  forces one full re-read of the files on upgrade. Upgrade checked by hand
+  on a database made by the v0.1.0 release binary. Tree green, 10 tests + 2 ignored end-to-end tests
   (need audio; see *Verification*). Reconnecting is tested by injecting
   errors, not by a real device switch. Docs split into README
   (users), this file (state), IMPLEMENTATION.md (internals).
@@ -133,6 +135,9 @@ from its scope note alone, without re-deriving context.
   `missing = 1`, so playlist entries survive. Paths are stored relative to
   the music root, valid UTF-8 only (others are skipped at scan time).
 - **All SQL lives in db.rs.** Other modules call its functions.
+- **Schema changes are migrations**: append to `MIGRATIONS` in db.rs, never
+  edit `SCHEMA` or a shipped migration. If the new columns come from the
+  files, end with `UPDATE tracks SET size = -1` to force one full re-read.
 - **Errors:** user-visible failures go through `App::report` (or set
   `message`) and show on the bottom line; only startup failures (music
   folder, database, audio device) exit, before the TUI starts.
@@ -159,14 +164,14 @@ from its scope note alone, without re-deriving context.
 
 The end-to-end tests play real audio, so it needs an audio device and a
 folder of three short tagged MP3s named `tone1.mp3`..`tone3.mp3` (titles
-"Tone 1" to "Tone 3", artist "Test Artist"). Run them after touching
+"Tone 1" to "Tone 3", artist "Test Artist", year 1997, genre "Test Genre"). Run them after touching
 playback, the queue, scanning, watching or the UI:
 
 ```sh
 mkdir -p fixtures
 for i in 1 2 3; do ffmpeg -f lavfi -i "sine=frequency=$((300+i*40)):duration=3" \
   -metadata title="Tone $i" -metadata artist="Test Artist" -metadata album="Album A" \
-  -metadata track=$i fixtures/tone$i.mp3; done
+  -metadata track=$i -metadata date=1997 -metadata genre="Test Genre" fixtures/tone$i.mp3; done
 FOLDLY_TEST_DIR=fixtures cargo test -- --ignored --nocapture
 ```
 

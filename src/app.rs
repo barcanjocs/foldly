@@ -1072,6 +1072,12 @@ mod tests {
         match &app.details {
             Some(Details::Track { details, also_in }) => {
                 assert_eq!((details.title.as_deref(), details.track_no), (Some("Tone 3"), Some(3)));
+                assert_eq!((details.year, details.genre.as_deref()), (Some(1997), Some("Test Genre")));
+                assert_eq!(
+                    (details.format.as_deref(), details.sample_rate, details.channels),
+                    (Some("MP3"), Some(44_100), Some(1))
+                );
+                assert!(details.bitrate_kbps.is_some_and(|b| b > 0));
                 assert_eq!(also_in, &["Mix"]);
             }
             _ => panic!("expected track details"),
@@ -1081,6 +1087,7 @@ mod tests {
         let screen = format!("{}", terminal.backend());
         println!("{screen}");
         assert!(screen.contains("Selected") && screen.contains("Also in: Mix") && screen.contains("Track 3"));
+        assert!(screen.contains("1997 · Test Genre") && screen.contains("MP3 ·") && screen.contains("44.1 kHz"));
         let mut small = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 26)).unwrap();
         small.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
         assert!(!format!("{}", small.backend()).contains("Selected"), "hidden on narrow screens");

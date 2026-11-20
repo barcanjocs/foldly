@@ -97,10 +97,15 @@ tree: playlists are how you organise.
 
 Above the queue, the info pane describes the song selected in the songs list (not the one
 playing, which is shown above the progress bar): title, artist, album, track and disc number,
-length, its file and size, and which other playlists it's in. With the sidebar focused it
+length, year and genre, which other playlists it's in, the format and audio quality (bitrate,
+sample rate, bit depth, mono/stereo), and its file and size. With the sidebar focused it
 summarises the selected source instead: how many tracks, their total length, and how many are
 missing. On screens narrower than 100 columns, or quite short, the info pane is hidden and the
 queue takes the whole right column.
+
+When you first run a version of foldly that stores more about each file (like the version that
+added year, genre and audio quality), it upgrades the database and re-reads every file once, so
+that first scan takes as long as the very first one did. Playlists and settings are kept.
 
 ### Scanning
 
@@ -212,7 +217,14 @@ CREATE TABLE tracks (
     track_no    INTEGER,
     disc_no     INTEGER,
     duration_ms INTEGER,
-    missing     INTEGER NOT NULL DEFAULT 0
+    missing     INTEGER NOT NULL DEFAULT 0,
+    year         INTEGER,
+    genre        TEXT,
+    format       TEXT,                 -- MP3, FLAC, Ogg Vorbis, WAV, M4A, …
+    bitrate_kbps INTEGER,
+    sample_rate  INTEGER,              -- Hz
+    bit_depth    INTEGER,
+    channels     INTEGER
 );
 
 CREATE TABLE playlists (

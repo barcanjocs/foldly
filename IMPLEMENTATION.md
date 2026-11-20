@@ -65,8 +65,10 @@ the column rects in `App::panes` for the mouse).
 Four tables; see README.md for the full DDL.
 
 - `tracks` — one row per audio file ever seen: `rel_path` (unique, relative
-  to the music root), `size` + `mtime` (the change stamp), tags, `duration_ms`,
-  and `missing`.
+  to the music root), `size` + `mtime` (the change stamp), tags (title,
+  artist, album, track/disc number, year, genre), audio properties
+  (`duration_ms`, `format`, `bitrate_kbps`, `sample_rate`, `bit_depth`,
+  `channels`), and `missing`.
 - `playlists` — `name` is `UNIQUE COLLATE NOCASE`, so "Mix" and "mix" can't
   coexist; `create_playlist`/`rename_playlist` turn the constraint error into
   "a playlist named … already exists".
@@ -76,6 +78,21 @@ Four tables; see README.md for the full DDL.
   (`PRAGMA foreign_keys` is on).
 - `settings` — key/value: `music_root`, `shuffle` (`"1"`/`"0"`), `repeat`
   (`off`/`all`/`one`), `sidebar_width` and `right_width` (percent).
+
+### Migrations
+
+`SCHEMA` is the original (v0.1.0) layout, applied with `CREATE … IF NOT
+EXISTS`; `MIGRATIONS` is an append-only list of SQL batches on top of it.
+SQLite's `user_version` counts how many have run. `migrate` runs each pending
+one in an `IMMEDIATE` transaction that re-reads `user_version` after taking
+the write lock, so the UI and scanner connections opening together can't both
+apply one. A fresh database goes through the same path (schema, then every
+migration), so there is only one way to reach the current layout.
+
+A migration that adds columns filled from the files ends with
+`UPDATE tracks SET size = -1`: no file has that size, so the next scan sees
+every file as changed and re-reads it (migration 1 does this for year, genre
+and the audio properties). Never edit a migration that has shipped; add one.
 
 ### Missing, not deleted
 
@@ -154,7 +171,10 @@ Because rescans are incremental and run off-thread, a rare unnecessary one
 costs a directory walk and nothing else.
 
 Tag reading (`read_file`) uses the file's primary tag, falling back to the
-first tag; empty or whitespace-only values become `None`. A file lofty can't
+first tag; empty or whitespace-only values become `None`. The year comes
+from lofty's `date()` (recording date, else year). Audio properties come from
+`properties()`; `format_name` maps lofty's `FileType` to familiar names
+(`Mpeg` → MP3). A file lofty can't
 parse is still recorded, with no tags, so it shows by file name and the
 decoder gets a chance at playback.
 
@@ -381,7 +401,10 @@ the other keeps a bold-only selection, so both selections stay visible.
 - **Right column** — when the screen is at least `INFO_MIN_SCREEN_WIDTH` (100)
   wide and the column at least `INFO_MIN_COLUMN_HEIGHT` (16) tall, it is
   split in half: the info pane (`draw_info`, a wrapping `Paragraph` titled
-  ` Selected `) over the queue. Otherwise the queue takes it all.
+  ` Selected `) over the queue. Otherwise the queue takes it all. Info lines
+  are ordered by usefulness with no spacer lines (title, artist, album, a
+  missing warning, track/disc/length, year/genre, "also in", quality, file),
+  because half a column can cut the end off.
 - **Queue** — titled `Queue i/n`; played tracks dimmed, the current one green.
   `queue_window_start` picks the first row: 0 until the current track nears
   the bottom, then scrolled to keep `rows / 3` (at most `MAX_LOOKAHEAD`, 5)
@@ -438,14 +461,16 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
 - *db.rs* — playlist editing on an in-memory db: unique names ignoring case,
   duplicates allowed by `add_to_playlist`, `swap_entries`, `remove_entry`,
   `add_tracks` skipping existing, deleting a playlist keeping its tracks,
-  `track_details` and `playlists_containing` (distinct, alphabetical).
+  `track_details` and `playlists_containing` (distinct, alphabetical), and
+  upgrading an original-layout database file (version, `size` reset,
+  playlists kept, nothing re-run on the next open).
+- *ui.rs* (sample-rate formatting) and the queue scrolling rules.
 - *scan.rs* — a real temp folder with dummy files: hidden files/folders and
   non-audio skipped, unchanged files not re-read, a vanished file marked
   missing but kept in its playlist, and restored when it returns.
 - *watch.rs* — `is_relevant` rules on hand-built events, and a real watcher
   on a temp folder: a new audio file is reported and `take_settled` fires once,
   only after `SETTLE`.
-- *ui.rs* — `queue_window_start` scrolling rules.
 - *filter.rs* — word order, fuzzy abbreviations, accents, fzf operators,
   unranked order.
 - *app.rs* — `shuffled_from` (chosen first, same tracks once each), plus one

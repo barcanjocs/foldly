@@ -100,23 +100,19 @@ fn run(db_path: &Path, root: &Path, tx: &Sender<ScanEvent>) -> Result<()> {
 }
 
 fn read_file(root: &Path, rel: &str, size: i64, mtime: i64) -> ScannedFile {
-    let mut file = ScannedFile {
-        rel_path: rel.to_string(),
-        size,
-        mtime,
-        title: None,
-        artist: None,
-        album: None,
-        track_no: None,
-        disc_no: None,
-        duration_ms: None,
-    };
+    let mut file = ScannedFile { rel_path: rel.to_string(), size, mtime, ..Default::default() };
     let Ok(tagged) = lofty::read_from_path(root.join(rel)) else { return file };
 
-    let duration = tagged.properties().duration();
+    let properties = tagged.properties();
+    let duration = properties.duration();
     if !duration.is_zero() {
         file.duration_ms = Some(duration.as_millis() as i64);
     }
+    file.format = Some(format_name(tagged.file_type()));
+    file.bitrate_kbps = properties.audio_bitrate().filter(|&b| b > 0);
+    file.sample_rate = properties.sample_rate().filter(|&r| r > 0);
+    file.bit_depth = properties.bit_depth();
+    file.channels = properties.channels();
     if let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) {
         let clean = |s: Option<std::borrow::Cow<str>>| s.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         file.title = clean(tag.title());
@@ -124,8 +120,26 @@ fn read_file(root: &Path, rel: &str, size: i64, mtime: i64) -> ScannedFile {
         file.album = clean(tag.album());
         file.track_no = tag.track();
         file.disc_no = tag.disk();
+        file.year = tag.date().map(|d| u32::from(d.year)).filter(|&y| y > 0);
+        file.genre = clean(tag.genre());
     }
     file
+}
+
+/// The name people know a format by, e.g. MP3 rather than lofty's `Mpeg`.
+fn format_name(file_type: lofty::file::FileType) -> String {
+    use lofty::file::FileType;
+    match file_type {
+        FileType::Mpeg => "MP3".into(),
+        FileType::Flac => "FLAC".into(),
+        FileType::Vorbis => "Ogg Vorbis".into(),
+        FileType::Opus => "Opus".into(),
+        FileType::Wav => "WAV".into(),
+        FileType::Aiff => "AIFF".into(),
+        FileType::Mp4 => "M4A".into(),
+        FileType::Aac => "AAC".into(),
+        other => format!("{other:?}"),
+    }
 }
 
 #[cfg(test)]

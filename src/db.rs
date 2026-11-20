@@ -2,6 +2,9 @@
 //!
 //! Tracks are stored by their path relative to the music root and are marked missing rather
 //! than deleted when their file disappears, so playlist entries survive a file coming back.
+//!
+//! `SCHEMA` is the original layout; `MIGRATIONS` change it from there, tracked by SQLite's
+//! `user_version`, so existing databases are upgraded in place on open.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -40,6 +43,20 @@ const SCHEMA: &str = "
     CREATE INDEX IF NOT EXISTS playlist_tracks_order ON playlist_tracks(playlist_id, position);
 ";
 
+/// Applied in order after `SCHEMA`; `user_version` counts how many have run. Append only.
+const MIGRATIONS: &[&str] = &[
+    // 1: more tags and the audio format for the info pane. Resetting `size` makes the next scan
+    // see every file as changed and re-read it, filling the new columns in.
+    "ALTER TABLE tracks ADD COLUMN year INTEGER;
+     ALTER TABLE tracks ADD COLUMN genre TEXT;
+     ALTER TABLE tracks ADD COLUMN format TEXT;
+     ALTER TABLE tracks ADD COLUMN bitrate_kbps INTEGER;
+     ALTER TABLE tracks ADD COLUMN sample_rate INTEGER;
+     ALTER TABLE tracks ADD COLUMN bit_depth INTEGER;
+     ALTER TABLE tracks ADD COLUMN channels INTEGER;
+     UPDATE tracks SET size = -1;",
+];
+
 #[derive(Clone)]
 pub struct Track {
     pub id: i64,
@@ -76,6 +93,13 @@ pub struct TrackDetails {
     pub rel_path: String,
     pub size: i64,
     pub missing: bool,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
+    pub format: Option<String>,
+    pub bitrate_kbps: Option<u32>,
+    pub sample_rate: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub channels: Option<u8>,
 }
 
 pub struct Playlist {
@@ -85,6 +109,7 @@ pub struct Playlist {
 }
 
 /// What the scanner learned about one file.
+#[derive(Default)]
 pub struct ScannedFile {
     pub rel_path: String,
     pub size: i64,
@@ -95,6 +120,13 @@ pub struct ScannedFile {
     pub track_no: Option<u32>,
     pub disc_no: Option<u32>,
     pub duration_ms: Option<i64>,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
+    pub format: Option<String>,
+    pub bitrate_kbps: Option<u32>,
+    pub sample_rate: Option<u32>,
+    pub bit_depth: Option<u8>,
+    pub channels: Option<u8>,
 }
 
 pub fn default_path() -> Result<PathBuf> {
@@ -104,13 +136,30 @@ pub fn default_path() -> Result<PathBuf> {
 }
 
 pub fn open(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path).with_context(|| format!("open database {}", path.display()))?;
+    let mut conn = Connection::open(path).with_context(|| format!("open database {}", path.display()))?;
     // WAL lets the scanner thread write while the UI reads.
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", true)?;
     conn.busy_timeout(Duration::from_secs(5))?;
     conn.execute_batch(SCHEMA)?;
+    migrate(&mut conn).context("upgrade the database")?;
     Ok(conn)
+}
+
+/// Runs the migrations this database hasn't had yet, each in its own transaction. The
+/// transaction takes the write lock before reading `user_version`, so two connections opening
+/// at once can't both apply the same migration.
+fn migrate(conn: &mut Connection) -> Result<()> {
+    for (index, sql) in MIGRATIONS.iter().enumerate() {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let version: usize = tx.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? as usize;
+        if version <= index {
+            tx.execute_batch(sql)?;
+            tx.pragma_update(None, "user_version", index as i64 + 1)?;
+        }
+        tx.commit()?;
+    }
+    Ok(())
 }
 
 pub fn get_setting(conn: &Connection, key: &str) -> Result<Option<String>> {
@@ -157,7 +206,8 @@ pub fn all_tracks(conn: &Connection) -> Result<Vec<Track>> {
 pub fn track_details(conn: &Connection, track_id: i64) -> Result<Option<TrackDetails>> {
     Ok(conn
         .query_row(
-            "SELECT title, artist, album, track_no, disc_no, duration_ms, rel_path, size, missing
+            "SELECT title, artist, album, track_no, disc_no, duration_ms, rel_path, size, missing,
+                    year, genre, format, bitrate_kbps, sample_rate, bit_depth, channels
              FROM tracks WHERE id = ?1",
             [track_id],
             |r| {
@@ -171,6 +221,13 @@ pub fn track_details(conn: &Connection, track_id: i64) -> Result<Option<TrackDet
                     rel_path: r.get(6)?,
                     size: r.get(7)?,
                     missing: r.get(8)?,
+                    year: r.get(9)?,
+                    genre: r.get(10)?,
+                    format: r.get(11)?,
+                    bitrate_kbps: r.get(12)?,
+                    sample_rate: r.get(13)?,
+                    bit_depth: r.get(14)?,
+                    channels: r.get(15)?,
                 })
             },
         )
@@ -200,13 +257,33 @@ pub fn file_stamps(conn: &Connection) -> Result<std::collections::HashMap<String
 
 pub fn upsert_track(conn: &Connection, f: &ScannedFile) -> Result<()> {
     conn.execute(
-        "INSERT INTO tracks (rel_path, size, mtime, title, artist, album, track_no, disc_no, duration_ms, missing)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
+        "INSERT INTO tracks (rel_path, size, mtime, title, artist, album, track_no, disc_no, duration_ms,
+                             year, genre, format, bitrate_kbps, sample_rate, bit_depth, channels, missing)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0)
          ON CONFLICT(rel_path) DO UPDATE SET
              size = excluded.size, mtime = excluded.mtime, title = excluded.title, artist = excluded.artist,
              album = excluded.album, track_no = excluded.track_no, disc_no = excluded.disc_no,
-             duration_ms = excluded.duration_ms, missing = 0",
-        params![f.rel_path, f.size, f.mtime, f.title, f.artist, f.album, f.track_no, f.disc_no, f.duration_ms],
+             duration_ms = excluded.duration_ms, year = excluded.year, genre = excluded.genre,
+             format = excluded.format, bitrate_kbps = excluded.bitrate_kbps, sample_rate = excluded.sample_rate,
+             bit_depth = excluded.bit_depth, channels = excluded.channels, missing = 0",
+        params![
+            f.rel_path,
+            f.size,
+            f.mtime,
+            f.title,
+            f.artist,
+            f.album,
+            f.track_no,
+            f.disc_no,
+            f.duration_ms,
+            f.year,
+            f.genre,
+            f.format,
+            f.bitrate_kbps,
+            f.sample_rate,
+            f.bit_depth,
+            f.channels
+        ],
     )?;
     Ok(())
 }
@@ -310,17 +387,7 @@ mod tests {
     use super::*;
 
     fn track(conn: &Connection, rel_path: &str) -> i64 {
-        let f = ScannedFile {
-            rel_path: rel_path.into(),
-            size: 1,
-            mtime: 1,
-            title: None,
-            artist: None,
-            album: None,
-            track_no: None,
-            disc_no: None,
-            duration_ms: None,
-        };
+        let f = ScannedFile { rel_path: rel_path.into(), size: 1, mtime: 1, ..Default::default() };
         upsert_track(conn, &f).unwrap();
         conn.query_row("SELECT id FROM tracks WHERE rel_path = ?1", [rel_path], |r| r.get(0)).unwrap()
     }
@@ -375,5 +442,38 @@ mod tests {
         delete_playlist(&conn, p).unwrap();
         assert!(playlists(&conn).unwrap().is_empty());
         assert_eq!(track_count(&conn).unwrap(), 3, "deleting a playlist keeps the tracks");
+    }
+
+    #[test]
+    fn upgrades_an_original_database_and_forces_a_rescan() {
+        let path = std::env::temp_dir().join(format!("foldly-test-migrate-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            // A database as the first release left it: the original schema, version 0.
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(SCHEMA).unwrap();
+            old.execute("INSERT INTO tracks (rel_path, size, mtime) VALUES ('a.mp3', 100, 5)", []).unwrap();
+            old.execute("INSERT INTO playlists (name) VALUES ('Mix')", []).unwrap();
+        }
+        let conn = open(&path).unwrap();
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
+        let (size, year): (i64, Option<u32>) = conn
+            .query_row("SELECT size, year FROM tracks WHERE rel_path = 'a.mp3'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((size, year), (-1, None), "size reset so the next scan re-reads the file");
+        assert_eq!(playlists(&conn).unwrap().len(), 1, "playlists untouched");
+        drop(conn);
+
+        // Opening again (as the scanner thread does) doesn't re-run anything.
+        let conn = open(&path).unwrap();
+        conn.execute("UPDATE tracks SET size = 100", []).unwrap();
+        drop(conn);
+        let conn = open(&path).unwrap();
+        assert_eq!(conn.query_row("SELECT size FROM tracks", [], |r| r.get::<_, i64>(0)).unwrap(), 100);
+        drop(conn);
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
     }
 }
