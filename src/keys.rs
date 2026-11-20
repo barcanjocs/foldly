@@ -136,26 +136,27 @@ pub const HELP: &[Section] = &[
     Section {
         title: "Browsing",
         rows: &[
-            Keys(&[A::Up, A::Down], "Move the selection in the focused pane"),
+            Keys(&[A::Up, A::Down], "Move the selection"),
             Keys(&[A::PageUp, A::PageDown], "Move 10 at a time"),
             Keys(&[A::First, A::Last], "Jump to the top / bottom"),
-            Keys(&[A::NextPane], "Focus the next pane: sidebar → songs → queue"),
-            Keys(&[A::Activate], "Sidebar: go to its songs. Songs: play, queue the rest"),
+            Keys(&[A::NextPane], "Next pane: sidebar → songs → queue"),
+            Keys(&[A::Activate], "Sidebar: open. Songs: play from here"),
             Keys(&[A::PaneLeft], "Focus the pane to the left"),
             Keys(&[A::ToSidebar], "Back to the sidebar"),
-            Keys(&[A::DividerLeft, A::DividerRight], "Move the divider right of the focused pane"),
-            Keys(&[A::Rescan], "Rescan now (changes are picked up automatically)"),
-            Note("Mouse", "Click selects, double-click plays, the wheel scrolls"),
-            Note("", "Drag a divider to resize; click or drag the bar to seek"),
+            Keys(&[A::DividerLeft, A::DividerRight], "Move the focused pane's right divider"),
+            Keys(&[A::Rescan], "Rescan (changes are picked up anyway)"),
+            Note("Mouse", "Click selects, double-click plays"),
+            Note("", "Wheel scrolls; drag borders to resize"),
+            Note("", "Click or drag the bar to seek"),
         ],
     },
     Section {
         title: "Filter",
         rows: &[
-            Keys(&[A::Filter], "Filter the list as you type; Enter plays the top match"),
+            Keys(&[A::Filter], "Filter as you type; Enter plays first"),
             Keys(&[A::ClearFilter], "Clear the filter"),
             Note("android radio", "Words match in any order"),
-            Note("rhpar", "Letters match fuzzily (Radiohead — Paranoid Android)"),
+            Note("rhpar", "Letters match fuzzily"),
             Note("'word", "Exact match"),
             Note("^word  word$", "Starts with / ends with"),
             Note("!word", "Exclude matches"),
@@ -165,34 +166,34 @@ pub const HELP: &[Section] = &[
         title: "Playback",
         rows: &[
             Keys(&[A::PlayPause], "Pause / resume"),
-            Keys(&[A::Next, A::Previous], "Next / previous (previous restarts after 3 s)"),
+            Keys(&[A::Next, A::Previous], "Next / previous (restarts after 3 s)"),
             Keys(&[A::SeekBack, A::SeekForward], "Seek 5 seconds"),
-            Keys(&[A::VolumeUp, A::VolumeDown], "Volume (foldly's own; remembered)"),
-            Keys(&[A::Shuffle], "Shuffle on / off (the current track keeps playing)"),
-            Keys(&[A::Repeat], "Repeat: off → all → one (loop this track)"),
+            Keys(&[A::VolumeUp, A::VolumeDown], "Volume (foldly's own, remembered)"),
+            Keys(&[A::Shuffle], "Shuffle on / off"),
+            Keys(&[A::Repeat], "Repeat: off → all → one"),
             Keys(&[A::Stop], "Stop"),
         ],
     },
     Section {
         title: "Playlists",
         rows: &[
-            Keys(&[A::AddToPlaylist], "Add the selected track to a playlist"),
-            Keys(&[A::AddAllToPlaylist], "Add all tracks shown to a playlist (skips duplicates)"),
-            Keys(&[A::AddPlayingToPlaylist], "Add the song that's playing to a playlist"),
+            Keys(&[A::AddToPlaylist], "Add the selected song to a playlist"),
+            Keys(&[A::AddAllToPlaylist], "Add all songs shown (skips repeats)"),
+            Keys(&[A::AddPlayingToPlaylist], "Add the song that's playing"),
             Keys(&[A::NewPlaylist], "New playlist"),
             Keys(&[A::Rename], "Rename the playlist being shown"),
-            Keys(&[A::Delete], "Songs: remove from playlist. Sidebar: delete playlist"),
-            Keys(&[A::MoveDown, A::MoveUp], "Move a track down / up in the playlist"),
+            Keys(&[A::Delete], "Remove song (sidebar: the playlist)"),
+            Keys(&[A::MoveDown, A::MoveUp], "Move a song down / up"),
         ],
     },
     Section {
         title: "Queue (when focused)",
         rows: &[
             Keys(&[A::Activate], "Jump to the selected song"),
-            Keys(&[A::Delete], "Remove it from the queue (n skips the one playing)"),
+            Keys(&[A::Delete], "Remove it (n skips the one playing)"),
             Keys(&[A::MoveDown, A::MoveUp], "Play it later / earlier"),
-            Keys(&[A::ClearUpcoming], "Clear everything after the current song"),
-            Keys(&[A::AddToPlaylist, A::AddAllToPlaylist], "Add it / the whole queue to a playlist"),
+            Keys(&[A::ClearUpcoming], "Clear what's after the current song"),
+            Keys(&[A::AddToPlaylist, A::AddAllToPlaylist], "Add it / the queue to a playlist"),
         ],
     },
     Section {
@@ -200,6 +201,9 @@ pub const HELP: &[Section] = &[
         rows: &[Keys(&[A::Help], "This help"), Keys(&[A::Redraw], "Redraw the screen"), Keys(&[A::Quit], "Quit")],
     },
 ];
+
+/// The width of the help's key column; every label leaves at least a space after it.
+pub const HELP_KEY_WIDTH: usize = 15;
 
 /// The keys of `actions` as shown in the help: an action's keys joined by spaces, actions by two.
 pub fn label(actions: &[Action]) -> String {
@@ -270,6 +274,17 @@ mod tests {
             if let Keys(actions, text) = row {
                 assert!(!label(actions).is_empty(), "{text:?} names an action with no keys");
             }
+        }
+    }
+
+    #[test]
+    fn the_key_column_fits_every_label() {
+        for row in HELP.iter().flat_map(|s| s.rows.iter()) {
+            let keys = match row {
+                Keys(actions, _) => label(actions),
+                Note(keys, _) => keys.to_string(),
+            };
+            assert!(keys.chars().count() < HELP_KEY_WIDTH, "{keys:?} leaves no gap in HELP_KEY_WIDTH");
         }
     }
 

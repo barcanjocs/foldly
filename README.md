@@ -78,7 +78,7 @@ usual. Inside foldly, press `?` for every key.
 | `d` | Songs: remove the track from this playlist. Sidebar: delete the playlist |
 | `J` / `K` | Move a track down / up in a playlist |
 | `u` | Rescan now (changes are picked up automatically) |
-| `?` | Help: every key, explained |
+| `?` | Help: every key, explained (two columns on wide terminals) |
 | `Ctrl-L` | Redraw the screen |
 | `q` | Quit |
 

@@ -483,36 +483,117 @@ fn draw_popup(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// The help popup: `keys::HELP`, in two columns when the screen is wide enough, descriptions
+/// wrapped under themselves. Scrolls (both columns together) when it doesn't fit.
 fn draw_help(frame: &mut Frame, scroll: &mut u16) {
-    const KEY_WIDTH: usize = 15;
-    let mut lines = Vec::new();
-    for (i, section) in keys::HELP.iter().enumerate() {
-        if i > 0 {
-            lines.push(Line::default());
-        }
-        lines.push(Line::from(section.title).bold().fg(ACCENT));
-        for row in section.rows {
-            let (keys, text) = match row {
-                keys::Row::Keys(actions, text) => (keys::label(actions), *text),
-                keys::Row::Note(keys, text) => (keys.to_string(), *text),
-            };
-            lines.push(Line::from(vec![Span::raw(format!("  {keys:<KEY_WIDTH$}")).bold(), Span::raw(text)]));
+    let screen = frame.area();
+    let (width, column_width, two_columns) = help_layout(screen.width);
+    let sections: Vec<Vec<Line>> = keys::HELP.iter().map(|section| help_section(section, column_width)).collect();
+    let mut columns = if two_columns { split_in_two(sections) } else { vec![sections.concat()] };
+    for column in &mut columns {
+        // Each section ends with a blank line; the column's last one shouldn't.
+        while column.last().is_some_and(|line| line.width() == 0) {
+            column.pop();
         }
     }
 
-    let screen = frame.area();
-    let height = (lines.len() as u16 + 2).min(screen.height);
-    let area = centered(screen, 80, height);
+    let content = columns.iter().map(Vec::len).max().unwrap_or(0) as u16;
+    let height = (content + 2).min(screen.height);
+    let area = centered(screen, width, height);
     // Stop scrolling once the last line is in view.
-    let max_scroll = (lines.len() as u16).saturating_sub(height.saturating_sub(2));
+    let max_scroll = content.saturating_sub(height.saturating_sub(2));
     *scroll = (*scroll).min(max_scroll);
     let hint = if max_scroll > 0 { " j/k scroll · any other key closes " } else { " any key closes " };
 
     frame.render_widget(Clear, area);
-    let help = Paragraph::new(lines)
-        .scroll((*scroll, 0))
-        .block(Block::bordered().title(" Keys ").title_bottom(Line::from(hint).dark_gray()));
-    frame.render_widget(help, area);
+    let block = Block::bordered().title(" Keys ").title_bottom(Line::from(hint).dark_gray());
+    let body = block.inner(area).inner(ratatui::layout::Margin { horizontal: 1, vertical: 0 });
+    frame.render_widget(block, area);
+    let areas: Vec<Rect> = if two_columns {
+        Layout::horizontal([Constraint::Length(column_width), Constraint::Length(3), Constraint::Length(column_width)])
+            .split(body)
+            .iter()
+            .step_by(2)
+            .copied()
+            .collect()
+    } else {
+        vec![body]
+    };
+    for (lines, area) in columns.into_iter().zip(areas) {
+        frame.render_widget(Paragraph::new(lines).scroll((*scroll, 0)), area);
+    }
+}
+
+/// The help popup's width, its column width, and whether it has two columns, for a screen
+/// `screen_width` wide.
+fn help_layout(screen_width: u16) -> (u16, u16, bool) {
+    let two_columns = screen_width >= HELP_TWO_COLUMNS_MIN_WIDTH;
+    let width = if two_columns { (screen_width - 4).min(150) } else { screen_width.min(84) };
+    // Inside the border, less a column of padding each side (and a gap between columns).
+    let inner = width.saturating_sub(4);
+    let column_width = if two_columns { inner.saturating_sub(3) / 2 } else { inner };
+    (width, column_width, two_columns)
+}
+
+/// Room for a description beside the key column, in a column `width` wide.
+fn help_text_width(width: u16) -> usize {
+    usize::from(width).saturating_sub(keys::HELP_KEY_WIDTH + 2).max(10)
+}
+
+/// Screens at least this wide get the two-column help.
+const HELP_TWO_COLUMNS_MIN_WIDTH: u16 = 120;
+
+/// One help section as lines `width` columns wide: its title, then a line per row with the keys
+/// in a fixed column and the description wrapped under itself; a blank line after.
+fn help_section(section: &keys::Section, width: u16) -> Vec<Line<'static>> {
+    let rows: Vec<(String, &str)> = section
+        .rows
+        .iter()
+        .map(|row| match row {
+            keys::Row::Keys(actions, text) => (keys::label(actions), *text),
+            keys::Row::Note(keys, text) => (keys.to_string(), *text),
+        })
+        .collect();
+    let key_width = keys::HELP_KEY_WIDTH;
+    let text_width = help_text_width(width);
+    let mut lines = vec![Line::from(section.title).bold().fg(ACCENT)];
+    for (keys, text) in rows {
+        for (i, part) in wrap(text, text_width).into_iter().enumerate() {
+            let keys = if i == 0 { keys.as_str() } else { "" };
+            lines.push(Line::from(vec![Span::raw(format!("  {keys:<key_width$}")).bold(), Span::raw(part)]));
+        }
+    }
+    lines.push(Line::default());
+    lines
+}
+
+/// Splits sections into two columns in reading order (down the left, then the right), at the
+/// split that makes the taller column as short as possible.
+fn split_in_two(sections: Vec<Vec<Line<'static>>>) -> Vec<Vec<Line<'static>>> {
+    let heights: Vec<usize> = sections.iter().map(Vec::len).collect();
+    let taller = |split: usize| heights[..split].iter().sum::<usize>().max(heights[split..].iter().sum());
+    let split = (1..sections.len()).min_by_key(|&split| taller(split)).unwrap_or(sections.len());
+    vec![sections[..split].concat(), sections[split..].concat()]
+}
+
+/// Words of `text` in lines at most `width` columns wide (a word longer than that is cut).
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let needed = if line.is_empty() { word.width() } else { line.width() + 1 + word.width() };
+        if needed > width && !line.is_empty() {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(&truncate_to_width(word, width));
+    }
+    if !line.is_empty() || lines.is_empty() {
+        lines.push(line);
+    }
+    lines
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -582,6 +663,29 @@ mod tests {
         // A wide character never gets split.
         assert_eq!(truncate_to_width("日本語", 4), "日…");
         assert_eq!(truncate_to_width("abc", 0), "");
+    }
+
+    /// Every description fits on one line of the two-column help on a 120-column screen, so the
+    /// whole help fits a 120×40 terminal without wrapping or scrolling.
+    #[test]
+    fn help_descriptions_fit_without_wrapping_at_120_columns() {
+        use unicode_width::UnicodeWidthStr;
+        let (_, column, two_columns) = super::help_layout(120);
+        let room = super::help_text_width(column);
+        assert!(two_columns);
+        for row in crate::keys::HELP.iter().flat_map(|s| s.rows.iter()) {
+            let (crate::keys::Row::Keys(_, text) | crate::keys::Row::Note(_, text)) = row;
+            assert!(text.width() <= room, "{text:?} is {} wide; the help has {room}", text.width());
+        }
+    }
+
+    #[test]
+    fn help_text_wraps_by_words() {
+        use super::wrap;
+        assert_eq!(wrap("Move the selection in the focused pane", 20), ["Move the selection", "in the focused pane"]);
+        assert_eq!(wrap("short", 20), ["short"]);
+        assert_eq!(wrap("", 20), [""]);
+        assert_eq!(wrap("a verylongwordthatdoesnotfit", 10), ["a", "verylongw…"]);
     }
 
     #[test]

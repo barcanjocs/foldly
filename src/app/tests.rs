@@ -620,7 +620,13 @@ fn resuming_where_you_left_off() {
 #[ignore]
 fn the_help_popup_fits_or_scrolls() {
     let mut h = Harness::new("help");
+    // On a 120×40 terminal it fits in two columns, so there's nothing to scroll.
     h.mode = Mode::Help { scroll: 0 };
+    let wide = screen(&mut h, 120, 40);
+    println!("{wide}");
+    assert!(wide.contains("any key closes") && !wide.contains("j/k scroll"), "fits without scrolling");
+    assert!(wide.contains("Browsing") && wide.contains("General") && wide.contains("Ctrl-C"));
+    // Narrower, one column.
     println!("{}", screen(&mut h, 100, 40));
     h.mode = Mode::Help { scroll: 999 };
     let short = screen(&mut h, 100, 12);

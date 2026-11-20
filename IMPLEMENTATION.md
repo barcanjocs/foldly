@@ -609,10 +609,21 @@ the selection by 3 in the pane under the pointer (or scrolls the help popup).
 
 `centered(area, w, h)` centres a fixed size with `Flex::Center`, shrinking to
 fit. Input prompts and the delete confirmation are 50×3; the picker grows with
-its rows up to 20. The help popup is 80 wide and as tall as its content or the
-screen; `draw_help` clamps `scroll` so the last line can't scroll past the
-bottom, and shows a scroll hint only when needed. Help descriptions must fit
-61 columns (80 minus borders and the 17-column key column).
+its rows up to 20.
+
+The help popup renders `keys::HELP`. From `HELP_TWO_COLUMNS_MIN_WIDTH` (120)
+columns it's as wide as the screen allows (up to 150) with two columns:
+`split_in_two` cuts the sections, in reading order, where the columns come
+out closest in height. Narrower, it's one column up to 84 wide.
+`help_section` puts keys in a `keys::HELP_KEY_WIDTH` column and `wrap`s the
+description under itself (by words, display-width aware), so text is never
+cut off. The popup is as tall as its tallest column or the screen; both
+columns scroll together, `draw_help` clamps `scroll` so the last line can't
+scroll past the bottom, and the scroll hint only shows when needed. The
+whole help fits a 120×40 terminal without wrapping: a unit test checks every
+description against `help_text_width` of the real `help_layout(120)`, and an
+end-to-end test checks nothing scrolls. Keep descriptions short; if a new one
+doesn't fit, shorten the wording rather than the layout.
 
 ## Testing
 
