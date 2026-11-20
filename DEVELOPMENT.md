@@ -21,7 +21,7 @@ truth for state — this file plus `git log` is all that is needed to resume.
 
 ## Now
 
-- State: v0.2.0 released. Playback (rodio), background scan into SQLite,
+- State: v0.3.0 released. Playback (rodio), background scan into SQLite,
   the music folder watched (notify) and rescanned once changes settle, three
   columns (sidebar of sources | songs | info over queue) with focus
   switching, resizable by `<`/`>` or mouse drag and saved in `settings`.
@@ -39,10 +39,10 @@ truth for state — this file plus `git log` is all that is needed to resume.
   the audio output while playing (no error on screen, playback follows).
   Not yet tried by hand: unplugging the playing device, i.e. the
   reconnect-and-resume path (tested only by injecting errors).
-- Next: backlog item C (Artists and Albums in the sidebar) or B (media
-  keys and OS Now Playing). Done since v0.2.0 (unreleased): focus
-  visibility, empty-list messages, double-click/seek clicks (Q), `P` (H),
-  lengths in lists (L), resume (A).
+  New in v0.3.0: obvious focus (one heavy border) and empty-list messages,
+  double-click to play and click-to-seek (Q), `P` adds the playing song to a
+  playlist (H), lengths in lists (L), resume where you left off (A).
+- Next: backlog item B (media keys and OS Now Playing), then C.
 - Blockers / open questions: never run on a real Linux desktop (item K).
 
 ## Backlog
