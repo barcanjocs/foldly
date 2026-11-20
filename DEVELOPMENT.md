@@ -21,25 +21,22 @@ truth for state — this file plus `git log` is all that is needed to resume.
 
 ## Now
 
-- State: first release, v0.1.0. Playback (rodio), background scan into SQLite,
-  virtual folders (All Tracks + playlists), playlist editing (add, add all
-  shown, remove, reorder, rename, delete), fuzzy filter (nucleo), shuffle,
-  repeat, queue panel, `?` help, one-line install from GitHub releases built
-  by `.github/workflows/release.yml`. Since v0.1.0: the music folder is
-  watched (notify) and rescanned automatically once changes settle (item I);
-  audio stream errors no longer print over the TUI, and a lost output device
-  is reopened with the track resumed; `Ctrl-L` redraws; the queue panel
-  scrolls only when needed; three columns (sidebar of sources | songs |
-  queue) with focus switching, resizable (`<`/`>` or mouse drag) and saved
-  in `settings`; an info pane above the queue for the selected song (stored
-  tags, file, "also in") or the selected source (count, length, missing).
-  The info pane also shows year, genre, format and quality, stored by
-  db migration 1 (the first; schema versioning via `user_version`), which
-  forces one full re-read of the files on upgrade. Upgrade checked by hand
-  on a database made by the v0.1.0 release binary. Tree green, 10 tests + 2 ignored end-to-end tests
-  (need audio; see *Verification*). Reconnecting is tested by injecting
-  errors, not by a real device switch. Docs split into README
-  (users), this file (state), IMPLEMENTATION.md (internals).
+- State: v0.2.0 released. Playback (rodio), background scan into SQLite,
+  the music folder watched (notify) and rescanned once changes settle, three
+  columns (sidebar of sources | songs | info over queue) with focus
+  switching, resizable by `<`/`>` or mouse drag and saved in `settings`.
+  Playlist editing (add, add all shown, remove, reorder, rename, delete),
+  fuzzy filter (nucleo), shuffle, repeat, `?` help, `Ctrl-L` redraw. The info
+  pane shows the selected song (tags incl. year/genre, format and quality,
+  file, "also in") or summarises the selected source. Audio stream errors are
+  captured; a lost output device is reopened with the track resumed. Schema
+  versioning via `user_version`; migration 1 (v0.2.0) forces one full
+  re-read of the files on upgrade, checked by hand on a database made by the
+  v0.1.0 binary. One-line install from GitHub releases built by
+  `.github/workflows/release.yml`. Tree green, 12 tests + 2 ignored
+  end-to-end tests (need audio; see *Verification*). Not yet tried by hand:
+  a real output-device switch (tested by injecting errors) and dragging
+  with a real mouse.
 - Next: backlog item A (resume last session).
 - Blockers / open questions: never run on a real Linux desktop (item K).
 
