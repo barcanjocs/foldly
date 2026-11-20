@@ -284,6 +284,9 @@ impl App {
         // Now Playing simply aren't there.
         app.os_media = NowPlaying::start().ok();
         app.shuffle = db::get_setting(&app.conn, SHUFFLE_SETTING)?.as_deref() == Some("1");
+        if let Some(volume) = db::get_setting(&app.conn, VOLUME_SETTING)?.and_then(|v| v.parse().ok()) {
+            app.player.set_volume(volume);
+        }
         app.repeat = Repeat::parse(db::get_setting(&app.conn, REPEAT_SETTING)?.as_deref().unwrap_or_default());
         let saved_width =
             |key| -> Result<Option<u16>> { Ok(db::get_setting(&app.conn, key)?.and_then(|w| w.parse().ok())) };
@@ -962,6 +965,17 @@ impl App {
         self.move_in(pane, delta);
     }
 
+    /// `+` / `-`: changes the volume by `delta` (0.05 is 5%) and remembers it.
+    pub fn change_volume(&mut self, delta: f32) {
+        self.set_volume(self.player.volume() + delta);
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.player.set_volume(volume);
+        let result = db::set_setting(&self.conn, VOLUME_SETTING, &self.player.volume().to_string());
+        self.report(result);
+    }
+
     /// Cycles repeat: off → all → one → off.
     pub fn cycle_repeat(&mut self) {
         self.repeat = self.repeat.cycle();
@@ -1089,7 +1103,7 @@ impl App {
             E::Seek(dir) => self.player.seek_by(seek(dir, Duration::from_secs(5))),
             E::SeekBy(dir, by) => self.player.seek_by(seek(dir, by)),
             E::SetPosition(MediaPosition(position)) => self.player.seek_to(position),
-            E::SetVolume(volume) => self.player.set_volume(volume as f32),
+            E::SetVolume(volume) => self.set_volume(volume as f32),
             E::SetShuffle(on) if on != self.shuffle => self.toggle_shuffle(),
             _ => {}
         }
@@ -1247,6 +1261,7 @@ impl App {
 
 const SHUFFLE_SETTING: &str = "shuffle";
 const REPEAT_SETTING: &str = "repeat";
+const VOLUME_SETTING: &str = "volume";
 const SIDEBAR_WIDTH_SETTING: &str = "sidebar_width";
 const RIGHT_WIDTH_SETTING: &str = "right_width";
 const DEFAULT_SIDEBAR_WIDTH: u16 = 20;
@@ -1408,6 +1423,9 @@ mod tests {
             app.tick();
             std::thread::sleep(Duration::from_millis(20));
         }
+
+        // A fresh start plays at full volume.
+        assert_eq!(app.player.volume(), 1.0);
 
         // The sidebar starts with just All Tracks, shown in the songs list, which has focus.
         assert_eq!(app.sidebar.len(), 1);
@@ -1772,7 +1790,7 @@ mod tests {
             assert!(app.player.position() < Duration::from_millis(1200), "{:?}", app.player.position());
             app.handle_media_command(E::SetVolume(0.5));
             assert_eq!(app.player.volume(), 0.5);
-            app.player.set_volume(0.8);
+            app.set_volume(1.0);
             app.handle_media_command(E::Next);
             assert_eq!(title(&app).as_deref(), Some("Tone 3"));
             app.handle_media_command(E::Previous);
@@ -1884,6 +1902,16 @@ mod tests {
         );
         assert_eq!(resumed.message.as_deref(), Some("picked up where you left off; Space plays"));
         drop(resumed);
+
+        // The volume is remembered too, and +/- steps stay whole percents.
+        app.change_volume(-0.05);
+        app.change_volume(-0.05);
+        app.change_volume(0.05);
+        assert_eq!(app.player.volume(), 0.95);
+        let resumed = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
+        assert_eq!(resumed.player.volume(), 0.95);
+        drop(resumed);
+        app.set_volume(1.0);
 
         // A track whose file went missing meanwhile drops out of the restored queue.
         db::set_missing(&app.conn, "tone2.mp3", true).unwrap();

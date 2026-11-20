@@ -66,7 +66,7 @@ usual. Inside foldly, press `?` for every key.
 | `Space` | Pause / resume |
 | `n` / `p` | Next / previous track |
 | `←` / `→` | Seek 5 seconds |
-| `+` / `-` | Volume |
+| `+` / `-` | Volume (starts at 100%, up to 150%; remembered) |
 | `z` | Shuffle on / off |
 | `r` | Repeat: off → all → one |
 | `s` | Stop |
@@ -284,7 +284,7 @@ CREATE TABLE playlist_tracks (
 );
 
 CREATE TABLE settings (
-    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat, sidebar_width, right_width, session_*
+    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat, volume, sidebar_width, right_width, session_*
     value TEXT NOT NULL
 );
 ```

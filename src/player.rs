@@ -38,7 +38,7 @@ impl Player {
             device,
             current: None,
             current_path: None,
-            volume: 0.8,
+            volume: 1.0,
             errors_tx,
             errors_rx,
             broken: false,
@@ -185,12 +185,10 @@ impl Player {
         self.volume
     }
 
-    pub fn change_volume(&mut self, delta: f32) {
-        self.set_volume(self.volume + delta);
-    }
-
+    /// 0.0–1.5 (up to 150%, for quiet recordings), kept to whole percents so repeated `+`/`-`
+    /// steps don't drift.
     pub fn set_volume(&mut self, volume: f32) {
-        self.volume = volume.clamp(0.0, 1.5);
+        self.volume = ((volume * 100.0).round() / 100.0).clamp(0.0, 1.5);
         if let Some(p) = &self.current {
             p.set_volume(self.volume);
         }

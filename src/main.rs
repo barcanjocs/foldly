@@ -274,8 +274,8 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('z') => app.toggle_shuffle(),
         KeyCode::Right => app.player.seek_by(5),
         KeyCode::Left => app.player.seek_by(-5),
-        KeyCode::Char('+') | KeyCode::Char('=') => app.player.change_volume(0.05),
-        KeyCode::Char('-') => app.player.change_volume(-0.05),
+        KeyCode::Char('+') | KeyCode::Char('=') => app.change_volume(0.05),
+        KeyCode::Char('-') => app.change_volume(-0.05),
 
         KeyCode::Char('a') => app.start_add_to_playlist(),
         KeyCode::Char('A') => app.start_add_all_to_playlist(),

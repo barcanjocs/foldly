@@ -82,7 +82,8 @@ Four tables; see README.md for the full DDL.
   own. Order is `position`, then `id`. Both foreign keys cascade
   (`PRAGMA foreign_keys` is on).
 - `settings` — key/value: `music_root`, `shuffle` (`"1"`/`"0"`), `repeat`
-  (`off`/`all`/`one`), `sidebar_width` and `right_width` (percent), and the
+  (`off`/`all`/`one`), `volume` (0.0–1.5), `sidebar_width` and `right_width`
+  (percent), and the
   saved session (`session_location`, `session_queue`, `session_unshuffled`,
   `session_index`, `session_position_ms`; see "Resuming").
 
@@ -447,7 +448,9 @@ blocks on the audio thread and pauses the player. Consequences:
 - "finished" is `current.empty()` (the decoder ran out), checked from `tick`;
 - position is `get_pos()`, seek is `try_seek()` (works because
   `Decoder::try_from(File)` records the byte length);
-- volume lives in `Player.volume` (0.0–1.5, default 0.8) and is applied to
+- volume lives in `Player.volume` (0.0–1.5, default 1.0, rounded to whole
+  percents so `+`/`-` steps don't drift; `App::set_volume` also saves it to
+  `settings` as `volume`) and is applied to
   each new rodio player;
 - there is no gapless playback (backlog G would append to the same player);
 - `load_paused` (resuming a session) and `reconnect` of a paused track go
