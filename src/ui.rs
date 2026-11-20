@@ -23,7 +23,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("g G  Home End", "Jump to the top / bottom"),
             ("Enter  l", "Open a folder, or play a track and queue the rest of the list"),
             ("Backspace  h", "Back to the top level"),
-            ("u", "Rescan (update) the music folder"),
+            ("u", "Rescan now (changes are picked up automatically)"),
         ],
     ),
     (

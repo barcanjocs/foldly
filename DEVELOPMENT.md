@@ -25,8 +25,10 @@ truth for state — this file plus `git log` is all that is needed to resume.
   virtual folders (All Tracks + playlists), playlist editing (add, add all
   shown, remove, reorder, rename, delete), fuzzy filter (nucleo), shuffle,
   repeat, queue panel, `?` help, one-line install from GitHub releases built
-  by `.github/workflows/release.yml`. Tree green, 7 tests + 1 ignored
-  end-to-end test (needs audio; see *Verification*). Docs split into README
+  by `.github/workflows/release.yml`. Since v0.1.0: the music folder is
+  watched (notify) and rescanned automatically once changes settle (item I).
+  Tree green, 9 tests + 2 ignored end-to-end tests (need audio; see
+  *Verification*). Docs split into README
   (users), this file (state), IMPLEMENTATION.md (internals).
 - Next: backlog item A (resume last session).
 - Blockers / open questions: never run on a real Linux desktop (item K).
@@ -74,9 +76,8 @@ from its scope note alone, without re-deriving context.
       repeat-one and with `n`/`p` (which must clear the preloaded source).
 - [ ] **H. Add the playing track to a playlist** (tiny). A key (e.g. `P`)
       that opens the picker for `now_playing` instead of the selection.
-- [ ] **I. Watch the music folder** (small-medium). Use `notify` to rescan
-      (debounced, a few seconds) when files change, instead of only on start
-      and `u`. The scanner is already incremental and runs off-thread.
+- [x] **I. Watch the music folder** — done 2026-11-20: `watch.rs`, rescans
+      2 s after relevant changes settle; `u` kept as a manual rescan.
 - [ ] **J. Relink after renames and root changes** (medium). Renamed files
       currently become a missing track plus a new one, dropping playlist
       entries. On scan, match new files to missing tracks by tags + duration
@@ -141,9 +142,10 @@ from its scope note alone, without re-deriving context.
 ./check   # fmt --check, clippy -D warnings, build, test — must be green before committing
 ```
 
-The end-to-end test plays real audio, so it needs an audio device and a
-folder of three short tagged MP3s (titles "Tone 1" to "Tone 3", artist
-"Test Artist"). Run it after touching playback, the queue or the UI:
+The end-to-end tests play real audio, so it needs an audio device and a
+folder of three short tagged MP3s named `tone1.mp3`..`tone3.mp3` (titles
+"Tone 1" to "Tone 3", artist "Test Artist"). Run them after touching
+playback, the queue, scanning, watching or the UI:
 
 ```sh
 mkdir -p fixtures
@@ -181,6 +183,8 @@ Requires Rust stable (edition 2024). Linux needs `libasound2-dev`.
   Unit tests at the bottom.
 - `src/scan.rs` — background scanner thread and tag reading (lofty).
   Unit test at the bottom.
+- `src/watch.rs` — music folder watcher (notify), event relevance rules,
+  settle timer. Unit tests at the bottom.
 - `src/filter.rs` — fuzzy filter over nucleo. Unit tests at the bottom.
 - `src/player.rs` — audio output: one rodio `Player` per track.
 - `src/ui.rs` — all drawing: browser, queue, transport, status line, popups,

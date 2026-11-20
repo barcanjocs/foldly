@@ -33,7 +33,7 @@ pub fn spawn(db_path: PathBuf, root: PathBuf) -> Receiver<ScanEvent> {
     rx
 }
 
-fn is_audio(path: &Path) -> bool {
+pub fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))

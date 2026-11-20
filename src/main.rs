@@ -7,6 +7,7 @@ mod filter;
 mod player;
 mod scan;
 mod ui;
+mod watch;
 
 use std::path::PathBuf;
 use std::time::Duration;

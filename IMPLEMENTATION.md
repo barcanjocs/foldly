@@ -11,13 +11,14 @@ changes.
 Single binary, no network. One SQLite file holds the track cache, playlists
 and settings; the music folder is only ever read. Two threads touch the
 database: the UI thread, and a scanner thread that exists only while a scan
-runs. rodio runs its own audio thread.
+runs. rodio runs its own audio thread, and notify its own watcher thread.
 
 ```
 main.rs        args → music root → Player + App → loop: tick → draw → poll(200 ms) → key
   └─ App       all UI state, the queue, a db Connection       (app.rs)
        ├─ db      all SQL; tracks, playlists, settings          (db.rs)
        ├─ scan    background scanner thread → ScanEvent channel (scan.rs)
+       ├─ Watch   folder watcher (notify) → "rescan due"        (watch.rs)
        ├─ Filter  fuzzy matcher (nucleo)                        (filter.rs)
        └─ Player  rodio output device + current track           (player.rs)
 ui.rs          draw(frame, &mut App): browser, queue, transport, status, popups
@@ -25,8 +26,9 @@ ui.rs          draw(frame, &mut App): browser, queue, transport, status, popups
 
 The loop runs at ~5 fps: `event::poll` times out after 200 ms so the progress
 bar moves without key presses. Each iteration first calls `App::tick`, which
-auto-advances when a track ends and drains scan events, then draws, then
-handles at most one key. Only key *press* events are handled.
+drains watcher events (starting a rescan once changes settle), auto-advances
+when a track ends and drains scan events, then draws, then handles at most one
+key. Only key *press* events are handled.
 
 Data flow per frame is **state → pixels**: `ui::draw` reads `App` and never
 touches the db. It takes `&mut App` only for widget state (the browser's
@@ -47,6 +49,8 @@ touches the db. It takes `&mut App` only for widget state (the browser's
   query. Tests at the bottom.
 - **`scan.rs`** — `spawn` starts the scanner thread; `run` walks the folder and
   updates the db; `read_file` reads tags with lofty. Test at the bottom.
+- **`watch.rs`** — `Watch`: a notify watcher on the music root, the filter
+  for which events matter, and the settle timer. Tests at the bottom.
 - **`filter.rs`** — `Filter`, a reusable nucleo `Matcher` with one method,
   `matches(query, haystacks, rank)`. Tests at the bottom.
 - **`player.rs`** — `Player` wraps rodio: the device sink plus at most one
@@ -122,6 +126,31 @@ overrides the path; tests pass a temp path (or `:memory:`) directly to
 `App::poll_scan` (called from `tick`) drains the channel without blocking,
 updates `scan_status` (drawn in the browser's top-right border), reloads the
 current list after progress, and drops the receiver when the scan ends.
+
+### Watching (`watch.rs`)
+
+`App::new` starts a `Watch` on the root (`notify::recommended_watcher`:
+FSEvents on macOS, inotify on Linux, recursive). If that fails (e.g. Linux's
+inotify watch limit) the error goes to the message line and `u` remains the
+only way to rescan.
+
+The watcher sends events to an `mpsc` channel. `App::poll_watch`, from `tick`,
+calls `Watch::poll`, which drains the channel and records when the last
+*relevant* event arrived; then, if no scan is running, `take_settled` returns
+`true` once that is `SETTLE` (2 s) in the past and `App` starts a rescan.
+Changes during a scan stay pending until it ends, then trigger another scan,
+so nothing is lost. Recording the drain time rather than the event's time is
+fine at 5 ticks/sec.
+
+`is_relevant` ignores reads, the root itself, anything under a hidden name,
+and existing non-audio files (cover art, notes). It accepts audio files,
+folders being created, removed or renamed (a folder moved in is reported only
+as a rename), and paths that no longer exist (a removed file or folder, whose
+type can't be checked any more). Data/metadata changes on folders are
+ignored: the files inside report themselves. Watcher errors (such as an
+inotify queue overflow) count as relevant, since changes may have been missed.
+Because rescans are incremental and run off-thread, a rare unnecessary one
+costs a directory walk and nothing else.
 
 Tag reading (`read_file`) uses the file's primary tag, falling back to the
 first tag; empty or whitespace-only values become `None`. A file lofty can't
@@ -321,6 +350,9 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
 - *scan.rs* — a real temp folder with dummy files: hidden files/folders and
   non-audio skipped, unchanged files not re-read, a vanished file marked
   missing but kept in its playlist, and restored when it returns.
+- *watch.rs* — `is_relevant` rules on hand-built events, and a real watcher
+  on a temp folder: a new audio file is reported and `take_settled` fires once,
+  only after `SETTLE`.
 - *filter.rs* — word order, fuzzy abbreviations, accents, fzf operators,
   unranked order.
 - *app.rs* — `shuffled_from` (chosen first, same tracks once each), plus one
@@ -329,7 +361,9 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   scanning, navigation, filtering, the picker, bulk add, reordering,
   playback and auto-advance, shuffle on/off, every repeat mode, and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help
-  popup at two heights.
+  popup at two heights. A second ignored test, `picks_up_music_added_while_running`,
+  runs `App` on a temp copy of the fixtures and checks that a dropped file, an
+  album folder moved in, and a deleted file are all picked up without `u`.
 
 Temp paths are `std::env::temp_dir()/foldly-<test>-<pid>` so parallel tests
 don't collide. CI (`release.yml`) runs `cargo test` on every target it can

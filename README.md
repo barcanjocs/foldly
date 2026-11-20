@@ -71,7 +71,7 @@ usual. Inside foldly, press `?` for every key.
 | `R` | Rename a playlist |
 | `d` | Remove a track from this playlist, or delete the selected playlist |
 | `J` / `K` | Move a track down / up in a playlist |
-| `u` | Rescan (update) the music folder |
+| `u` | Rescan now (changes are picked up automatically) |
 | `?` | Help: every key, explained |
 | `q` | Quit |
 
@@ -86,10 +86,15 @@ tree: playlists are how you organise.
 
 ### Scanning
 
-foldly scans the music folder in the background every time it starts, and when you press `u`.
-The browser's border shows progress. The first scan reads every file's tags; later scans skip
-files whose size and modification time haven't changed, so they are quick. MP3, FLAC, OGG
-Vorbis, WAV and M4A (AAC) files are picked up; hidden files and folders are skipped.
+foldly scans the music folder in the background when it starts, and watches it while it runs:
+add, remove or rename music (files or whole folders) and foldly rescans two seconds after the
+changes stop, so copying in an album triggers one scan. The browser's border shows progress, and
+the bottom line reports what changed. `u` rescans by hand, e.g. if watching couldn't start (foldly
+says so on startup).
+
+The first scan reads every file's tags; later scans skip files whose size and modification time
+haven't changed, so they are quick. MP3, FLAC, OGG Vorbis, WAV and M4A (AAC) files are picked
+up; hidden files and folders are skipped. Changes to other files, like cover art, are ignored.
 
 ### Playlists
 

@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use nucleo_matcher::Utf32String;
@@ -17,6 +17,7 @@ use crate::db::{self, Playlist, Track};
 use crate::filter::Filter;
 use crate::player::Player;
 use crate::scan::{self, ScanEvent};
+use crate::watch::Watch;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
@@ -129,6 +130,8 @@ pub struct App {
     pub message: Option<String>,
     pub scan_status: Option<String>,
     scan_rx: Option<Receiver<ScanEvent>>,
+    /// Watches the music folder; `None` if watching couldn't start (`u` still rescans).
+    watch: Option<Watch>,
     pub should_quit: bool,
 }
 
@@ -157,8 +160,13 @@ impl App {
             message: None,
             scan_status: None,
             scan_rx: None,
+            watch: None,
             should_quit: false,
         };
+        match Watch::start(&app.root) {
+            Ok(watch) => app.watch = Some(watch),
+            Err(err) => app.message = Some(format!("{err:#}; press u to rescan after adding music")),
+        }
         app.shuffle = db::get_setting(&app.conn, SHUFFLE_SETTING)?.as_deref() == Some("1");
         app.repeat = Repeat::parse(db::get_setting(&app.conn, REPEAT_SETTING)?.as_deref().unwrap_or_default());
         app.reload()?;
@@ -577,8 +585,10 @@ impl App {
         self.now_playing = None;
     }
 
-    /// Called every loop iteration: advances when a track ends and picks up scan progress.
+    /// Called every loop iteration: advances when a track ends, rescans once folder changes
+    /// settle, and picks up scan progress.
     pub fn tick(&mut self) {
+        self.poll_watch();
         if self.player.finished() {
             match (self.repeat, self.queue_index) {
                 (Repeat::One, Some(i)) => self.play_index(i),
@@ -586,6 +596,16 @@ impl App {
             }
         }
         self.poll_scan();
+    }
+
+    fn poll_watch(&mut self) {
+        let Some(watch) = &mut self.watch else { return };
+        let now = Instant::now();
+        watch.poll(now);
+        // Changes made during a scan stay pending until it finishes, then trigger another.
+        if self.scan_rx.is_none() && watch.take_settled(now) {
+            self.rescan();
+        }
     }
 
     fn poll_scan(&mut self) {
@@ -688,6 +708,53 @@ mod tests {
             ids.sort();
             assert_eq!(ids, (0..50).collect::<Vec<_>>(), "same tracks, each once");
         }
+    }
+
+    /// Needs an audio device and the same fixtures as `playlists_as_virtual_folders`
+    /// (copied, not modified); run with `FOLDLY_TEST_DIR=<dir> cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn picks_up_music_added_while_running() {
+        let fixtures = PathBuf::from(std::env::var("FOLDLY_TEST_DIR").unwrap());
+        let base = std::env::temp_dir().join(format!("foldly-e2e-watch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, outside) = (base.join("music"), base.join("outside"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(outside.join("New Album")).unwrap();
+        for i in 1..=3 {
+            std::fs::copy(fixtures.join(format!("tone{i}.mp3")), root.join(format!("tone{i}.mp3"))).unwrap();
+        }
+        let root = root.canonicalize().unwrap();
+        let mut app = App::new(root.clone(), base.join("test.db"), Player::new().unwrap()).unwrap();
+        let count = |app: &mut App, expected: usize| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                app.tick();
+                let n = db::track_count(&app.conn).unwrap();
+                if (n == expected && app.scan_rx.is_none()) || std::time::Instant::now() > deadline {
+                    return n;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        };
+        assert_eq!(count(&mut app, 3), 3);
+
+        // A file dropped into the folder.
+        std::fs::copy(fixtures.join("tone1.mp3"), root.join("dropped.mp3")).unwrap();
+        assert_eq!(count(&mut app, 4), 4);
+
+        // A whole album folder moved in: only the folder's rename is reported.
+        std::fs::copy(fixtures.join("tone2.mp3"), outside.join("New Album/01.mp3")).unwrap();
+        std::fs::copy(fixtures.join("tone3.mp3"), outside.join("New Album/02.mp3")).unwrap();
+        std::fs::rename(outside.join("New Album"), root.join("New Album")).unwrap();
+        assert_eq!(count(&mut app, 6), 6);
+
+        // A deleted file becomes missing.
+        std::fs::remove_file(root.join("dropped.mp3")).unwrap();
+        assert_eq!(count(&mut app, 5), 5);
+
+        drop(app);
+        std::fs::remove_dir_all(&base).unwrap();
     }
 
     /// Needs an audio device and a folder of three short tagged MP3s ("Tone 1".."Tone 3",
