@@ -34,9 +34,11 @@ truth for state — this file plus `git log` is all that is needed to resume.
   re-read of the files on upgrade, checked by hand on a database made by the
   v0.1.0 binary. One-line install from GitHub releases built by
   `.github/workflows/release.yml`. Tree green, 12 tests + 2 ignored
-  end-to-end tests (need audio; see *Verification*). Not yet tried by hand:
-  a real output-device switch (tested by injecting errors) and dragging
-  with a real mouse.
+  end-to-end tests (need audio; see *Verification*). Confirmed by hand on
+  macOS (2026-11-20): dragging the dividers with a real mouse, and switching
+  the audio output while playing (no error on screen, playback follows).
+  Not yet tried by hand: unplugging the playing device, i.e. the
+  reconnect-and-resume path (tested only by injecting errors).
 - Next: backlog item A (resume last session).
 - Blockers / open questions: never run on a real Linux desktop (item K).
 
