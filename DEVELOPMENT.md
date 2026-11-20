@@ -42,13 +42,13 @@ truth for state — this file plus `git log` is all that is needed to resume.
   New in v0.3.0: obvious focus (one heavy border) and empty-list messages,
   double-click to play and click-to-seek (Q), `P` adds the playing song to a
   playlist (H), lengths in lists (L), resume where you left off (A).
-- State addendum: v0.4.0 adds media keys and Now Playing (B).
+- State addendum: v0.4.0 adds media keys and Now Playing (B). v0.5.0 adds
+  the interactive queue pane (D), dragging on the progress bar to scrub, and
+  a remembered volume starting at 100%.
 - Decision (2026-11-20): foldly's volume stays separate from the system
   volume. macOS volume keys never reach apps, and the user prefers an
   app-level volume since macOS has no per-app mixer; don't try to link them.
-- Next: backlog item C (Artists and Albums in the sidebar). Since v0.4.0
-  (unreleased): the interactive queue pane (D), and dragging on the
-  progress bar to scrub (preview while dragging, one seek on release).
+- Next: backlog item C (Artists and Albums in the sidebar).
 - Dependency watch: souvlaki 0.9 pulls in `block` 0.1.6 on macOS, which
   cargo warns "will be rejected by a future version of Rust"; souvlaki has a
   1.0 rewrite in progress. If the warning becomes an error, move to 1.0 or
