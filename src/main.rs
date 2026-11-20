@@ -9,12 +9,17 @@ mod scan;
 mod ui;
 mod watch;
 
+use std::io::stdout;
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
 
 use app::{App, Mode};
 use player::Player;
@@ -59,7 +64,16 @@ fn main() -> Result<()> {
     let mut app = App::new(root, db_path, player)?;
 
     let mut terminal = ratatui::init();
+    // Mouse capture lets the divider be dragged. ratatui's panic hook restores the terminal
+    // but doesn't know about mouse capture, so turn it off first on a panic too.
+    execute!(stdout(), EnableMouseCapture)?;
+    let restore_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(stdout(), DisableMouseCapture);
+        restore_hook(info);
+    }));
     let result = run(&mut terminal, &mut app);
+    let _ = execute!(stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -98,11 +112,12 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         // Wake at least a few times a second so the progress bar moves.
-        if event::poll(Duration::from_millis(200))?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            handle_key(app, key);
+        if event::poll(Duration::from_millis(200))? {
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => handle_key(app, key),
+                Event::Mouse(mouse) => handle_mouse(app, mouse),
+                _ => {}
+            }
         }
     }
     Ok(())
@@ -175,6 +190,26 @@ fn handle_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn handle_mouse(app: &mut App, mouse: MouseEvent) {
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => app.mouse_down(mouse.column, mouse.row),
+        MouseEventKind::Drag(MouseButton::Left) => app.mouse_drag(mouse.column),
+        MouseEventKind::Up(MouseButton::Left) => app.mouse_up(),
+        // Capturing the mouse stops terminals turning the wheel into arrow keys, so do it here.
+        MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+            let down = mouse.kind == MouseEventKind::ScrollDown;
+            match &mut app.mode {
+                Mode::Normal | Mode::Filter => app.move_selection(if down { 3 } else { -3 }),
+                Mode::Help { scroll } => {
+                    *scroll = if down { scroll.saturating_add(3) } else { scroll.saturating_sub(3) }
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
 fn handle_normal_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Char('q') => app.should_quit = true,
@@ -189,6 +224,8 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
         KeyCode::End | KeyCode::Char('G') => app.select_last(),
         KeyCode::Enter | KeyCode::Char('l') => app.activate_selected(),
         KeyCode::Backspace | KeyCode::Char('h') => app.go_up(),
+        KeyCode::Char('<') => app.resize_browser(-2),
+        KeyCode::Char('>') => app.resize_browser(2),
         KeyCode::Char('/') => app.mode = Mode::Filter,
 
         KeyCode::Char(' ') => app.player.toggle_pause(),

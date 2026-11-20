@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use nucleo_matcher::Utf32String;
+use ratatui::layout::Rect;
 use ratatui::widgets::ListState;
 use rusqlite::Connection;
 
@@ -135,6 +136,13 @@ pub struct App {
     /// Ask the main loop to repaint the whole screen, wiping anything another library may
     /// have written over it.
     pub needs_full_redraw: bool,
+    /// The browser's share of the width, in percent; the queue gets the rest.
+    pub browser_width: u16,
+    /// Where the last frame put the two main panels and the divider between them, so mouse
+    /// events can be hit-tested. Set by `ui::draw`.
+    pub panels: Rect,
+    pub divider_x: u16,
+    dragging_divider: bool,
     pub should_quit: bool,
 }
 
@@ -165,6 +173,10 @@ impl App {
             scan_rx: None,
             watch: None,
             needs_full_redraw: false,
+            browser_width: DEFAULT_BROWSER_WIDTH,
+            panels: Rect::default(),
+            divider_x: 0,
+            dragging_divider: false,
             should_quit: false,
         };
         match Watch::start(&app.root) {
@@ -173,6 +185,9 @@ impl App {
         }
         app.shuffle = db::get_setting(&app.conn, SHUFFLE_SETTING)?.as_deref() == Some("1");
         app.repeat = Repeat::parse(db::get_setting(&app.conn, REPEAT_SETTING)?.as_deref().unwrap_or_default());
+        if let Some(width) = db::get_setting(&app.conn, BROWSER_WIDTH_SETTING)?.and_then(|w| w.parse().ok()) {
+            app.browser_width = clamp_browser_width(width);
+        }
         app.reload()?;
         app.rescan();
         Ok(app)
@@ -557,6 +572,45 @@ impl App {
         }
     }
 
+    // --- panel sizes ----------------------------------------------------------------------
+
+    /// Widens (positive) or narrows (negative) the browser by `delta` percent and saves it.
+    pub fn resize_browser(&mut self, delta: i16) {
+        self.set_browser_width(self.browser_width.saturating_add_signed(delta), true);
+    }
+
+    fn set_browser_width(&mut self, width: u16, save: bool) {
+        self.browser_width = clamp_browser_width(width);
+        if save {
+            let result = db::set_setting(&self.conn, BROWSER_WIDTH_SETTING, &self.browser_width.to_string());
+            self.report(result);
+        }
+    }
+
+    /// A left click: starts dragging if it landed on the divider between the panels.
+    pub fn mouse_down(&mut self, column: u16, row: u16) {
+        let on_divider = column + 1 >= self.divider_x && column <= self.divider_x;
+        let in_panels = row >= self.panels.y && row < self.panels.y + self.panels.height;
+        self.dragging_divider = on_divider && in_panels;
+    }
+
+    /// Moves the divider to follow the mouse while dragging. Saved when the button is released.
+    pub fn mouse_drag(&mut self, column: u16) {
+        if self.dragging_divider && self.panels.width > 0 {
+            // The queue's left border follows the pointer, so grabbing it doesn't jump.
+            let browser_columns = column.saturating_sub(self.panels.x);
+            let width =
+                (u32::from(browser_columns) * 100 + u32::from(self.panels.width) / 2) / u32::from(self.panels.width);
+            self.set_browser_width(width as u16, false);
+        }
+    }
+
+    pub fn mouse_up(&mut self) {
+        if std::mem::take(&mut self.dragging_divider) {
+            self.set_browser_width(self.browser_width, true);
+        }
+    }
+
     /// Cycles repeat: off → all → one → off.
     pub fn cycle_repeat(&mut self) {
         self.repeat = self.repeat.cycle();
@@ -659,6 +713,14 @@ impl App {
 
 const SHUFFLE_SETTING: &str = "shuffle";
 const REPEAT_SETTING: &str = "repeat";
+const BROWSER_WIDTH_SETTING: &str = "browser_width";
+const DEFAULT_BROWSER_WIDTH: u16 = 62;
+/// Neither panel can be squeezed below a fifth of the width.
+const BROWSER_WIDTH_RANGE: std::ops::RangeInclusive<u16> = 20..=80;
+
+fn clamp_browser_width(width: u16) -> u16 {
+    width.clamp(*BROWSER_WIDTH_RANGE.start(), *BROWSER_WIDTH_RANGE.end())
+}
 
 /// Identifies a queue item; the entry id tells apart repeats of a track within a playlist.
 fn queue_key(t: &Track) -> (i64, Option<i64>) {
@@ -932,6 +994,35 @@ mod tests {
         app.player.toggle_pause();
         std::thread::sleep(Duration::from_millis(300));
         assert!(app.player.position() > after, "playing again on the new device");
+
+        // Resizing: drag the divider (saved on release), use < and >, clamp, and reload.
+        let render = |app: &mut App| {
+            let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+            format!("{}", terminal.backend())
+        };
+        render(&mut app);
+        assert_eq!((app.browser_width, app.divider_x), (62, 62));
+        app.mouse_down(30, 2);
+        app.mouse_drag(50);
+        assert_eq!(app.browser_width, 62, "a click away from the divider doesn't drag");
+        app.mouse_down(62, 2);
+        app.mouse_drag(40);
+        assert_eq!(app.browser_width, 40);
+        assert_eq!(db::get_setting(&app.conn, "browser_width").unwrap(), None, "not saved mid-drag");
+        app.mouse_up();
+        assert_eq!(db::get_setting(&app.conn, "browser_width").unwrap().as_deref(), Some("40"));
+        render(&mut app);
+        assert_eq!(app.divider_x, 40, "the queue now starts where it was dropped");
+        app.resize_browser(2);
+        assert_eq!(app.browser_width, 42);
+        app.resize_browser(-100);
+        assert_eq!(app.browser_width, 20, "clamped");
+        app.resize_browser(10);
+        let reopened = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
+        assert_eq!(reopened.browser_width, 30, "remembered");
+        drop(reopened);
+        println!("{}", render(&mut app));
 
         // Help fits a normal terminal; on a short one it scrolls, stopping at the last line.
         app.mode = Mode::Help { scroll: 0 };

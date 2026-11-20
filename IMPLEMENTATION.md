@@ -74,7 +74,7 @@ Four tables; see README.md for the full DDL.
   own. Order is `position`, then `id`. Both foreign keys cascade
   (`PRAGMA foreign_keys` is on).
 - `settings` — key/value: `music_root`, `shuffle` (`"1"`/`"0"`), `repeat`
-  (`off`/`all`/`one`).
+  (`off`/`all`/`one`), `browser_width` (percent, 20–80).
 
 ### Missing, not deleted
 
@@ -332,8 +332,10 @@ library may have printed. `Ctrl-L` sets the same flag.
 
 ### Layout
 
-`draw` splits the frame into: the main area (browser 62% | queue 38%), the
-transport (3 rows), and the status line (1 row). Popups draw last, centred,
+`draw` splits the frame into: the main area (browser `browser_width`% |
+queue the rest), the transport (3 rows), and the status line (1 row). It
+records the main area (`App::panels`) and the queue's x (`App::divider_x`)
+for mouse hit-testing, one of the two things draw writes to `App`. Popups draw last, centred,
 over a `Clear`.
 
 - **Browser** — a `List` with `▌` as the highlight symbol. The border title is
@@ -352,6 +354,27 @@ over a `Clear`.
   `shuffle` and `repeat all|one`.
 - **Status line** — the filter prompt while typing, else `message`, else an
   active-filter reminder, else per-location key hints ending in `? help`.
+
+### Resizing and the mouse
+
+`browser_width` (default 62, clamped to 20–80 by `clamp_browser_width`) is
+loaded from `settings` in `App::new`. `<`/`>` call `resize_browser(∓2)`,
+which saves immediately.
+
+`main.rs` enables crossterm mouse capture after `ratatui::init` and disables
+it before `ratatui::restore`; a panic hook wrapping ratatui's own does the
+same, since ratatui's hook doesn't know about mouse capture. `handle_mouse`
+routes left down/drag/up to `App::mouse_down`/`mouse_drag`/`mouse_up`:
+
+- down starts a drag only on the divider (the queue's left border or the
+  browser's right border, inside `panels`);
+- drag sets the width so the queue's left border sits under the pointer
+  (rounded to the nearest percent), without saving;
+- up saves, so a drag costs one db write.
+
+Mouse capture stops terminals from translating the wheel into arrow keys in
+the alternate screen, so the wheel is handled explicitly: it moves the
+selection by 3 (or scrolls the help popup).
 
 ### Popups
 
@@ -383,7 +406,9 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   (three tagged tones, see DEVELOPMENT.md). It drives `App` directly through
   scanning, navigation, filtering, the picker, bulk add, reordering,
   playback and auto-advance, shuffle on/off, every repeat mode, audio errors
-  injected with `Player::inject_error` (ignored vs. reconnect-and-resume), and renders
+  injected with `Player::inject_error` (ignored vs. reconnect-and-resume),
+  dragging the divider and `<`/`>` (clamping, saved on release, reloaded by a
+  second `App`), and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help
   popup at two heights. A second ignored test, `picks_up_music_added_while_running`,
   runs `App` on a temp copy of the fixtures and checks that a dropped file, an

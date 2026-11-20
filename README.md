@@ -57,6 +57,7 @@ usual. Inside foldly, press `?` for every key.
 | `↑`/`↓`, `j`/`k` | Move the selection (`PgUp`/`PgDn` by 10, `g`/`G` to top/bottom) |
 | `Enter`/`l` | Open a folder, or play a track and queue the rest of the list |
 | `Backspace`/`h` | Back to the top level |
+| `<` / `>` | Narrow / widen the browser (or drag the divider with the mouse) |
 | `/` | Fuzzy filter the current list; `Enter` plays the top match, `Esc` clears |
 | `Space` | Pause / resume |
 | `n` / `p` | Next / previous track |
@@ -160,6 +161,15 @@ there)", or an error such as a file that couldn't be decoded), replacing the key
 next key press. If the music folder or database can't be opened, foldly prints the error to the
 terminal and exits.
 
+### Panel sizes
+
+The browser and the queue share the width. Drag the border between them with the mouse, or press
+`<` and `>`; neither panel goes below a fifth of the width. The split is saved and restored next
+time. The mouse wheel moves the selection.
+
+Because foldly uses the mouse, selecting text on screen needs a modifier in most terminals:
+Shift-drag (or Option-drag in macOS Terminal and iTerm2).
+
 ### Changing audio output
 
 Switching the system's output (to headphones, or a different speaker) is followed automatically.
@@ -199,7 +209,7 @@ CREATE TABLE playlist_tracks (
 );
 
 CREATE TABLE settings (
-    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat
+    key   TEXT PRIMARY KEY,  -- music_root, shuffle, repeat, browser_width
     value TEXT NOT NULL
 );
 ```

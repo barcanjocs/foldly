@@ -23,6 +23,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("g G  Home End", "Jump to the top / bottom"),
             ("Enter  l", "Open a folder, or play a track and queue the rest of the list"),
             ("Backspace  h", "Back to the top level"),
+            ("< >", "Narrow / widen the browser (or drag the divider)"),
             ("u", "Rescan now (changes are picked up automatically)"),
         ],
     ),
@@ -67,7 +68,13 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, transport, status] =
         Layout::vertical([Constraint::Min(3), Constraint::Length(3), Constraint::Length(1)]).areas(frame.area());
-    let [browser, queue] = Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).areas(main);
+    let width = app.browser_width;
+    let [browser, queue] =
+        Layout::horizontal([Constraint::Percentage(width), Constraint::Percentage(100 - width)]).areas(main);
+    // Remembered for mouse hit-testing: the divider is the queue's left border (the browser's
+    // right border is just left of it).
+    app.panels = main;
+    app.divider_x = queue.x;
 
     draw_browser(frame, app, browser);
     draw_queue(frame, app, queue);

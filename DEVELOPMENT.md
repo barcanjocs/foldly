@@ -29,7 +29,8 @@ truth for state — this file plus `git log` is all that is needed to resume.
   watched (notify) and rescanned automatically once changes settle (item I);
   audio stream errors no longer print over the TUI, and a lost output device
   is reopened with the track resumed; `Ctrl-L` redraws; the queue panel
-  scrolls only when needed. Tree green, 10 tests + 2 ignored end-to-end tests
+  scrolls only when needed; the browser/queue split is resizable (`<`/`>`
+  or mouse drag) and saved in `settings`. Tree green, 10 tests + 2 ignored end-to-end tests
   (need audio; see *Verification*). Reconnecting is tested by injecting
   errors, not by a real device switch. Docs split into README
   (users), this file (state), IMPLEMENTATION.md (internals).
@@ -103,6 +104,10 @@ from its scope note alone, without re-deriving context.
       added in the last N days, never played) shown as virtual folders.
 - [ ] **P. Config file** (medium). Keybindings, colours, seek step, start
       view, in `dirs::config_dir()/foldly/config.toml`.
+- [ ] **Q. Mouse clicks** (small). Mouse capture is on for divider dragging;
+      clicking a row could select it (double-click to play), and clicking
+      the progress bar could seek. Hit-test with the rects `ui::draw`
+      already records (extend `App::panels` with the transport area).
 - [ ] **Nits** (tiny, do whenever):
   - A file that fails to decode sets the message line, but `play_index`
     clears it when the next track starts, so the skip is invisible. Keep the
