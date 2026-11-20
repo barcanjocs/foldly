@@ -44,7 +44,10 @@ truth for state — this file plus `git log` is all that is needed to resume.
   playlist (H), lengths in lists (L), resume where you left off (A).
 - State addendum: v0.4.0 adds media keys and Now Playing (B). v0.5.0 adds
   the interactive queue pane (D), dragging on the progress bar to scrub, and
-  a remembered volume starting at 100%.
+  a remembered volume starting at 100%. v0.5.1 is a tidy-up: the queue's
+  rules in queue.rs (unit-tested), focused end-to-end tests on a shared
+  harness, one key table (keys.rs) driving dispatch and help, and a
+  two-column help popup that fits 120×40.
 - Decision (2026-11-20): foldly's volume stays separate from the system
   volume. macOS volume keys never reach apps, and the user prefers an
   app-level volume since macOS has no per-app mixer; don't try to link them.
