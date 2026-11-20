@@ -21,9 +21,9 @@ jobs:
           # Ubuntu 22.04 keeps the glibc requirement low, so the Linux builds run on older distros.
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
-          - { target: aarch64-apple-darwin, os: macos-14 }
+          - { target: aarch64-apple-darwin, os: macos-15 }
           # Intel Macs: cross-compiled on Apple silicon (tests can't run there).
-          - { target: x86_64-apple-darwin, os: macos-14, cross: true }
+          - { target: x86_64-apple-darwin, os: macos-15, cross: true }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
