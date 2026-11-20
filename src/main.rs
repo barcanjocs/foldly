@@ -4,6 +4,7 @@
 mod app;
 mod db;
 mod filter;
+mod media;
 mod player;
 mod scan;
 mod ui;
@@ -40,6 +41,29 @@ Options:
 Press ? inside foldly to see every key.";
 
 fn main() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    return run_off_the_main_thread(run_app);
+    #[cfg(not(target_os = "macos"))]
+    run_app()
+}
+
+/// On macOS, media key and Control Center commands are delivered through the main thread's run
+/// loop, so the main thread runs that loop while the app (terminal UI, audio, everything) runs
+/// on a second thread. Panics in the app are passed on, so they behave as they would on the
+/// main thread.
+#[cfg(target_os = "macos")]
+fn run_off_the_main_thread(app: fn() -> Result<()>) -> Result<()> {
+    use core_foundation::runloop::{CFRunLoop, kCFRunLoopDefaultMode};
+    let thread = std::thread::Builder::new().name("foldly".into()).spawn(app)?;
+    while !thread.is_finished() {
+        // Wakes for each delivered command, else every 100 ms to check the app is still going.
+        // SAFETY: reading an immutable CoreFoundation constant.
+        CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, Duration::from_millis(100), true);
+    }
+    thread.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+}
+
+fn run_app() -> Result<()> {
     match std::env::args().nth(1).as_deref() {
         Some("-V" | "--version") => {
             println!("foldly {}", env!("CARGO_PKG_VERSION"));

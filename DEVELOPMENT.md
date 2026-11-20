@@ -42,7 +42,12 @@ truth for state — this file plus `git log` is all that is needed to resume.
   New in v0.3.0: obvious focus (one heavy border) and empty-list messages,
   double-click to play and click-to-seek (Q), `P` adds the playing song to a
   playlist (H), lengths in lists (L), resume where you left off (A).
-- Next: backlog item B (media keys and OS Now Playing), then C.
+- Next: backlog item C (Artists and Albums in the sidebar). Since v0.3.0
+  (unreleased): media keys and Now Playing (B), not yet checked by hand.
+- Dependency watch: souvlaki 0.9 pulls in `block` 0.1.6 on macOS, which
+  cargo warns "will be rejected by a future version of Rust"; souvlaki has a
+  1.0 rewrite in progress. If the warning becomes an error, move to 1.0 or
+  patch `block` to `block2`.
 - Blockers / open questions: never run on a real Linux desktop (item K).
 
 ## Backlog
@@ -53,12 +58,11 @@ from its scope note alone, without re-deriving context.
 - [x] **A. Resume last session** — done 2026-11-20: saved on quit and every
       15 s; restored paused at the saved position. Real quit path checked by
       running the binary in a pty.
-- [ ] **B. Media keys and OS Now Playing** (medium). Use `souvlaki` (MPRIS on
-      Linux, MPNowPlayingInfoCenter on macOS) to publish title/artist/album/
-      duration/position and receive play/pause/next/previous/seek. Events
-      arrive on another thread: forward them through an `mpsc` channel
-      drained in `App::tick`, like `ScanEvent`. macOS needs a run loop on
-      the main thread for callbacks; check souvlaki's docs for TUI apps.
+- [x] **B. Media keys and OS Now Playing** — done 2026-11-20 (souvlaki,
+      `media.rs`; on macOS the app runs off the main thread). Commands are
+      tested by injecting them; the OS side needs a hand check: macOS media
+      keys and Control Center, and Linux MPRIS (`playerctl -p foldly
+      metadata`, `playerctl -p foldly play-pause`).
 - [ ] **C. Artists and Albums in the sidebar** (medium). Add sidebar items
       for each artist and album (new `Location` variants, `SELECT DISTINCT`
       over tags), perhaps under collapsible "Artists" / "Albums" headings;
@@ -206,6 +210,8 @@ Requires Rust stable (edition 2024). Linux needs `libasound2-dev`.
 - `src/watch.rs` — music folder watcher (notify), event relevance rules,
   settle timer. Unit tests at the bottom.
 - `src/filter.rs` — fuzzy filter over nucleo. Unit tests at the bottom.
+- `src/media.rs` — media keys and Now Playing (souvlaki): command channel,
+  change-only publishing.
 - `src/player.rs` — audio output: one rodio `Player` per track.
 - `src/ui.rs` — all drawing: sidebar, songs, queue, transport, status line, popups,
   and the `HELP` key table.

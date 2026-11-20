@@ -186,7 +186,11 @@ impl Player {
     }
 
     pub fn change_volume(&mut self, delta: f32) {
-        self.volume = (self.volume + delta).clamp(0.0, 1.5);
+        self.set_volume(self.volume + delta);
+    }
+
+    pub fn set_volume(&mut self, volume: f32) {
+        self.volume = volume.clamp(0.0, 1.5);
         if let Some(p) = &self.current {
             p.set_volume(self.volume);
         }

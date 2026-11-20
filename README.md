@@ -209,6 +209,18 @@ point in the song. The wheel scrolls the pane it's over.
 Because foldly uses the mouse, selecting text on screen needs a modifier in most terminals:
 Shift-drag (or Option-drag in macOS Terminal and iTerm2).
 
+### Media keys and Now Playing
+
+foldly tells the system what's playing and listens to its playback controls:
+
+- **macOS:** the play/pause, next and previous keys on the keyboard, headphone buttons, and the
+  Now Playing controls in Control Center (including scrubbing and shuffle) all control foldly,
+  and Control Center shows the song, artist, album and progress.
+- **Linux:** foldly appears as an MPRIS player called `foldly`, so desktop media widgets
+  (GNOME, KDE, …), keyboard media keys handled by your desktop, and `playerctl` work with it,
+  e.g. `playerctl -p foldly play-pause`. This needs a D-Bus session, which desktops have; without
+  one, foldly runs as usual without these.
+
 ### Changing audio output
 
 Switching the system's output (to headphones, or a different speaker) is followed automatically.

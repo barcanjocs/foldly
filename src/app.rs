@@ -16,6 +16,7 @@ use rusqlite::Connection;
 
 use crate::db::{self, Playlist, Track, TrackDetails};
 use crate::filter::Filter;
+use crate::media::{NowPlaying, PlayState};
 use crate::player::Player;
 use crate::scan::{self, ScanEvent};
 use crate::watch::Watch;
@@ -200,6 +201,8 @@ pub struct App {
     scan_rx: Option<Receiver<ScanEvent>>,
     /// Watches the music folder; `None` if watching couldn't start (`u` still rescans).
     watch: Option<Watch>,
+    /// Media keys and the OS's Now Playing display; `None` where unavailable.
+    os_media: Option<NowPlaying>,
     /// Ask the main loop to repaint the whole screen, wiping anything another library may
     /// have written over it.
     pub needs_full_redraw: bool,
@@ -248,6 +251,7 @@ impl App {
             scan_status: None,
             scan_rx: None,
             watch: None,
+            os_media: None,
             needs_full_redraw: false,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             right_width: DEFAULT_RIGHT_WIDTH,
@@ -262,6 +266,9 @@ impl App {
             Ok(watch) => app.watch = Some(watch),
             Err(err) => app.message = Some(format!("{err:#}; press u to rescan after adding music")),
         }
+        // Optional: where there's no OS service (e.g. Linux without a D-Bus session), the keys and
+        // Now Playing simply aren't there.
+        app.os_media = NowPlaying::start().ok();
         app.shuffle = db::get_setting(&app.conn, SHUFFLE_SETTING)?.as_deref() == Some("1");
         app.repeat = Repeat::parse(db::get_setting(&app.conn, REPEAT_SETTING)?.as_deref().unwrap_or_default());
         let saved_width =
@@ -840,6 +847,10 @@ impl App {
     /// Called every loop iteration: advances when a track ends, rescans once folder changes
     /// settle, and picks up scan progress.
     pub fn tick(&mut self) {
+        let commands = self.os_media.as_ref().map(NowPlaying::commands).unwrap_or_default();
+        for command in commands {
+            self.handle_media_command(command);
+        }
         if let Some(message) = self.player.handle_errors() {
             self.message = Some(message);
             self.needs_full_redraw = true;
@@ -853,6 +864,7 @@ impl App {
         }
         self.poll_scan();
         self.refresh_details();
+        self.publish_now_playing();
         // Saved now and then too, so closing the terminal or a crash loses little.
         if self.player.is_active() && self.session_saved_at.elapsed() >= SESSION_SAVE_INTERVAL {
             let result = self.save_session();
@@ -901,6 +913,42 @@ impl App {
             unknown: self.tracks.len() - known.len(),
             missing: self.tracks.iter().filter(|t| t.missing).count(),
         }
+    }
+
+    // --- media keys and Now Playing -------------------------------------------------------
+
+    /// Acts on a command from media keys, Control Center, or an MPRIS client like `playerctl`.
+    pub fn handle_media_command(&mut self, command: souvlaki::MediaControlEvent) {
+        use souvlaki::{MediaControlEvent as E, MediaPosition, SeekDirection};
+        let playing = self.player.is_active() && !self.player.is_paused();
+        let seek = |dir: SeekDirection, by: Duration| -> i64 {
+            let secs = by.as_secs().max(1) as i64;
+            if dir == SeekDirection::Forward { secs } else { -secs }
+        };
+        match command {
+            E::Play if self.player.is_paused() => self.player.toggle_pause(),
+            E::Pause if playing => self.player.toggle_pause(),
+            E::Toggle => self.player.toggle_pause(),
+            E::Next => self.next(),
+            E::Previous => self.previous(),
+            E::Stop => self.stop(),
+            E::Seek(dir) => self.player.seek_by(seek(dir, Duration::from_secs(5))),
+            E::SeekBy(dir, by) => self.player.seek_by(seek(dir, by)),
+            E::SetPosition(MediaPosition(position)) => self.player.seek_to(position),
+            E::SetVolume(volume) => self.player.set_volume(volume as f32),
+            E::SetShuffle(on) if on != self.shuffle => self.toggle_shuffle(),
+            _ => {}
+        }
+    }
+
+    fn publish_now_playing(&mut self) {
+        let Some(media) = &mut self.os_media else { return };
+        let state = match (self.player.is_active(), self.player.is_paused()) {
+            (false, _) => PlayState::Stopped,
+            (true, true) => PlayState::Paused,
+            (true, false) => PlayState::Playing,
+        };
+        media.publish(self.now_playing.as_ref(), state, self.player.position());
     }
 
     // --- session --------------------------------------------------------------------------
@@ -1524,6 +1572,44 @@ mod tests {
         drop(reopened);
         app.focus_pane(Pane::Songs);
         println!("{}", render(&mut app));
+
+        // Media keys / Control Center / MPRIS commands drive playback like the keyboard does.
+        {
+            use souvlaki::{MediaControlEvent as E, MediaPosition, SeekDirection};
+            app.focus_pane(Pane::Songs);
+            app.select(0);
+            app.activate_selected(); // Tone 1, queue Tone 1, Tone 3, Tone 2
+            let title = |app: &App| app.now_playing.as_ref().map(|t| t.display_title());
+            app.handle_media_command(E::Toggle);
+            assert!(app.player.is_paused());
+            app.handle_media_command(E::Pause);
+            assert!(app.player.is_paused(), "pause while paused stays paused");
+            app.handle_media_command(E::Play);
+            assert!(!app.player.is_paused());
+            app.handle_media_command(E::Play);
+            assert!(!app.player.is_paused(), "play while playing keeps playing");
+            app.handle_media_command(E::SetPosition(MediaPosition(Duration::from_millis(1500))));
+            std::thread::sleep(Duration::from_millis(100));
+            assert!((1.4..2.0).contains(&app.player.position().as_secs_f64()), "{:?}", app.player.position());
+            app.handle_media_command(E::SeekBy(SeekDirection::Backward, Duration::from_secs(1)));
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(app.player.position() < Duration::from_millis(1200), "{:?}", app.player.position());
+            app.handle_media_command(E::SetVolume(0.5));
+            assert_eq!(app.player.volume(), 0.5);
+            app.player.set_volume(0.8);
+            app.handle_media_command(E::Next);
+            assert_eq!(title(&app).as_deref(), Some("Tone 3"));
+            app.handle_media_command(E::Previous);
+            assert_eq!(title(&app).as_deref(), Some("Tone 1"));
+            app.handle_media_command(E::SetShuffle(true));
+            assert!(app.shuffle);
+            app.handle_media_command(E::SetShuffle(true));
+            assert!(app.shuffle, "already on: no toggle");
+            app.handle_media_command(E::SetShuffle(false));
+            app.handle_media_command(E::Stop);
+            assert!(app.now_playing.is_none());
+            app.tick(); // publishing a stopped player is fine too
+        }
 
         // Quitting saves the session; the next start shows the same playlist with the same queue,
         // the song loaded paused at the same spot and selected.

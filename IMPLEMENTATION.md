@@ -11,7 +11,10 @@ changes.
 Single binary, no network. One SQLite file holds the track cache, playlists
 and settings; the music folder is only ever read. Two threads touch the
 database: the UI thread, and a scanner thread that exists only while a scan
-runs. rodio runs its own audio thread, and notify its own watcher thread.
+runs. rodio runs its own audio thread, notify its own watcher thread, and
+souvlaki (media keys) its own on Linux. On macOS the whole app runs on a
+second thread, because the main thread must run the system run loop that
+delivers media key commands (see "Media keys and Now Playing").
 
 ```
 main.rs        args → music root → Player + App → loop: tick → draw → poll(200 ms) → key
@@ -54,6 +57,8 @@ the column rects in `App::panes` for the mouse).
   for which events matter, and the settle timer. Tests at the bottom.
 - **`filter.rs`** — `Filter`, a reusable nucleo `Matcher` with one method,
   `matches(query, haystacks, rank)`. Tests at the bottom.
+- **`media.rs`** — `NowPlaying`: souvlaki's `MediaControls`, the channel its
+  commands arrive on, and change-only publishing of what's playing.
 - **`player.rs`** — `Player` wraps rodio: the device sink plus at most one
   playing rodio `Player`.
 - **`ui.rs`** — every draw function, the `HELP` key table, colours (`ACCENT`).
@@ -363,6 +368,35 @@ finds the saved current track by key in the rebuilt queue. If it's there, it
 is loaded with `Player::load_paused` at the saved position and selected in
 the songs list; if not, the queue is kept with nothing loaded.
 
+## Media keys and Now Playing (`media.rs`)
+
+souvlaki provides both directions: MPRIS (D-Bus) on Linux, using the
+pure-Rust `zbus` backend so there's no libdbus build dependency, and
+MPNowPlayingInfoCenter / MPRemoteCommandCenter on macOS. `NowPlaying::start`
+registers as `foldly` and attaches a handler that sends each
+`MediaControlEvent` into an `mpsc` channel. `App::new` keeps it if it starts
+and silently does without otherwise (no D-Bus session, the name already taken
+by another foldly).
+
+`App::tick` drains the channel first and routes each command through
+`handle_media_command`, which maps it onto the same actions as the keyboard:
+play/pause/toggle (Play only resumes a paused track, Pause only pauses a
+playing one), next/previous/stop, seek by a direction (5 s) or an amount, set
+position (Control Center's scrubber, MPRIS `SetPosition`), volume (MPRIS),
+and shuffle (macOS). At the end of `tick`, `publish_now_playing` hands the
+current track, state and position to `NowPlaying::publish`, which sends
+metadata only when the track changes and playback state only when it changes
+or, while playing, once per `POSITION_INTERVAL` (1 s).
+
+**macOS threads.** MPRemoteCommandCenter delivers commands as blocks on the
+main dispatch queue, which only runs while the main thread runs its run loop.
+foldly's loop blocks in `event::poll`, so on macOS `main` spawns the app
+(`run_app`: argument parsing, terminal, audio, everything) on a thread named
+`foldly` and runs `CFRunLoop::run_in_mode` in 100 ms slices until that thread
+finishes; a panic on it is re-raised with `resume_unwind`. ratatui,
+crossterm, rodio and SQLite don't care which thread they run on. Publishing
+(MPNowPlayingInfoCenter) works from any thread.
+
 ## Playback (`player.rs`)
 
 `Player::new` opens the default output device and keeps the `MixerDeviceSink`
@@ -542,7 +576,8 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   source summary, hidden on a narrow screen), clicks, double-clicks (slow vs. quick) and
   seeking on the progress bar, the wheel, dragging
   both dividers and `<`/`>` (clamping, saved on
-  release, reloaded by a second `App`), resuming (same source, queue, track,
+  release, reloaded by a second `App`), media commands (each kind, including
+  no-ops like Play while playing), resuming (same source, queue, track,
   paused at the saved position and selected; a missing track dropped; nothing
   after a stop), and renders
   frames to a `TestBackend` (printed with `--nocapture`), including the help
