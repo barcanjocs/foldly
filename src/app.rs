@@ -219,6 +219,9 @@ pub struct App {
     pub right_width: u16,
     pub panes: PaneRects,
     dragging: Option<Divider>,
+    /// While dragging on the progress bar: where the track will be when the button is released.
+    /// The bar shows this instead of the real position; the seek happens once, on release.
+    pub scrub: Option<Duration>,
     /// The last row clicked and when, to spot a double-click.
     last_click: Option<(Instant, Pane, usize)>,
     /// When the session was last saved, and the queue as last written (it can be the whole
@@ -267,6 +270,7 @@ impl App {
             right_width: DEFAULT_RIGHT_WIDTH,
             panes: PaneRects::default(),
             dragging: None,
+            scrub: None,
             last_click: None,
             session_saved_at: Instant::now(),
             saved_queue: None,
@@ -754,6 +758,8 @@ impl App {
                     self.now_playing = Some(track);
                     self.queue_index = Some(index);
                     self.message = None;
+                    // A drag on the bar was aimed at the previous track.
+                    self.scrub = None;
                     return;
                 }
                 Err(err) => {
@@ -897,25 +903,35 @@ impl App {
         }
     }
 
-    /// Seeks the playing track to the point of the progress bar under `column`, if the click is
-    /// on the bar. Returns whether it was.
+    /// A press on the progress bar starts scrubbing at that point; returns whether it was on the
+    /// bar. The seek itself waits for the release (`mouse_up`), so dragging doesn't stutter.
     fn seek_to_column(&mut self, column: u16, row: u16) -> bool {
         let bar = self.panes.transport;
         let on_bar = row >= bar.y && row < bar.y + bar.height && column > bar.x && column + 1 < bar.x + bar.width;
         if !on_bar {
             return false;
         }
-        if let Some(duration) = self.now_playing.as_ref().and_then(|t| t.duration) {
-            // The bar fills the border's inside, columns x+1 ..= x+width-2.
-            let inner = f64::from(bar.width.saturating_sub(2).max(1));
-            let fraction = (f64::from(column - bar.x - 1) / inner).clamp(0.0, 1.0);
-            self.player.seek_to(duration.mul_f64(fraction));
-        }
+        self.scrub = self.bar_position(column);
         true
+    }
+
+    /// The point of the track under `column` of the progress bar; columns past either end of
+    /// the bar give its start or end, so a drag can overshoot.
+    fn bar_position(&self, column: u16) -> Option<Duration> {
+        let duration = self.now_playing.as_ref().and_then(|t| t.duration)?;
+        let bar = self.panes.transport;
+        // The bar fills the border's inside, columns x+1 ..= x+width-2.
+        let inner = f64::from(bar.width.saturating_sub(2).max(1));
+        let fraction = (f64::from(column.saturating_sub(bar.x + 1)) / inner).clamp(0.0, 1.0);
+        Some(duration.mul_f64(fraction))
     }
 
     /// Moves the grabbed divider to follow the pointer. Saved when the button is released.
     pub fn mouse_drag(&mut self, column: u16) {
+        if self.scrub.is_some() {
+            self.scrub = self.bar_position(column).or(self.scrub);
+            return;
+        }
         let total = self.panes.sidebar.width + self.panes.songs.width + self.panes.right.width;
         let Some(divider) = self.dragging else { return };
         if total == 0 {
@@ -934,6 +950,9 @@ impl App {
     pub fn mouse_up(&mut self) {
         if self.dragging.take().is_some() {
             self.save_widths();
+        }
+        if let Some(position) = self.scrub.take() {
+            self.player.seek_to(position);
         }
     }
 
@@ -1676,9 +1695,30 @@ mod tests {
         // border is rows 6..9 and its inside columns 1..=98.
         assert_eq!(app.panes.transport, Rect::new(0, 6, 100, 3));
         app.mouse_down(50, 7, at(5000));
+        app.mouse_up();
         std::thread::sleep(Duration::from_millis(100));
         let position = app.player.position().as_secs_f64();
         assert!((1.3..2.0).contains(&position), "seeked to {position}s of 3s");
+
+        // Dragging along the bar previews the spot (the bar shows it) and seeks once, on release.
+        app.mouse_down(25, 7, at(5500));
+        let pressed_at = app.player.position();
+        app.mouse_drag(75);
+        let preview = app.scrub.expect("scrubbing").as_secs_f64();
+        assert!((2.1..2.4).contains(&preview), "previewing {preview}s");
+        assert!(app.player.position() < pressed_at + Duration::from_millis(300), "no seek while dragging");
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        assert!(format!("{}", terminal.backend()).contains("00:02 / 00:03"), "the bar shows the preview");
+        app.mouse_drag(200);
+        assert_eq!(app.scrub, app.now_playing.as_ref().unwrap().duration, "past the end: the end");
+        app.mouse_drag(75);
+        app.mouse_up();
+        assert!(app.scrub.is_none());
+        std::thread::sleep(Duration::from_millis(100));
+        let position = app.player.position().as_secs_f64();
+        assert!((2.1..2.8).contains(&position), "seeked to {position}s on release");
+        app.player.seek_to(Duration::from_millis(1500));
         app.mouse_drag(60);
         assert_eq!(app.sidebar_width, 20, "a click away from the dividers doesn't drag");
 

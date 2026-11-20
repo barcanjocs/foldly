@@ -46,8 +46,9 @@ truth for state — this file plus `git log` is all that is needed to resume.
 - Decision (2026-11-20): foldly's volume stays separate from the system
   volume. macOS volume keys never reach apps, and the user prefers an
   app-level volume since macOS has no per-app mixer; don't try to link them.
-- Next: dragging on the progress bar to scrub (asked for), then C. Since
-  v0.4.0 (unreleased): the interactive queue pane (D).
+- Next: backlog item C (Artists and Albums in the sidebar). Since v0.4.0
+  (unreleased): the interactive queue pane (D), and dragging on the
+  progress bar to scrub (preview while dragging, one seek on release).
 - Dependency watch: souvlaki 0.9 pulls in `block` 0.1.6 on macOS, which
   cargo warns "will be rejected by a future version of Rust"; souvlaki has a
   1.0 rewrite in progress. If the warning becomes an error, move to 1.0 or

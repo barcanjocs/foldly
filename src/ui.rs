@@ -29,7 +29,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("Backspace", "Back to the sidebar"),
             ("< >", "Move the divider right of the focused pane"),
             ("Mouse", "Click selects, double-click plays, the wheel scrolls"),
-            ("", "Drag a divider to resize; click the progress bar to seek"),
+            ("", "Drag a divider to resize; click or drag the bar to seek"),
             ("u", "Rescan now (changes are picked up automatically)"),
         ],
     ),
@@ -426,7 +426,8 @@ fn draw_queue(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
     let player = &app.player;
-    let position = player.position();
+    // While scrubbing, the bar shows where the drag would land.
+    let position = app.scrub.unwrap_or_else(|| player.position());
     let duration = app.now_playing.as_ref().and_then(|t| t.duration);
 
     let icon = if !player.is_active() {

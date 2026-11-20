@@ -553,8 +553,12 @@ routes left down/drag/up to `App::mouse_down`/`mouse_drag`/`mouse_up`:
 
 - down on a divider (either border of the pair, at `panes.songs.x` or
   `panes.right.x`) grabs it as `dragging`; on the progress bar
-  (`panes.transport`) it seeks to the clicked fraction of the track
-  (`seek_to_column`, over the bar's inside columns); anywhere else in the
+  (`panes.transport`) it starts *scrubbing*: `App::scrub` holds the target
+  position (`bar_position`: the column's fraction of the bar's inside,
+  clamped so a drag can overshoot either end), drags update it, the
+  transport draws it instead of the real position, and `mouse_up` performs a
+  single `seek_to`. Seeking only on release avoids restarting the decoder on
+  every mouse move; a new track starting clears a pending scrub; anywhere else in the
   sidebar or songs it focuses that pane and selects the clicked row (`offset`
   from the list's `ListState`, minus the top border). A second click on the
   same pane and row within `DOUBLE_CLICK` (400 ms, tracked in `last_click`)

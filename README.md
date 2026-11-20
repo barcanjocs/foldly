@@ -219,7 +219,8 @@ width. Sizes are saved and restored next time.
 
 Clicking a pane focuses it and selects the row under the pointer; double-clicking acts like
 `Enter` (plays a song, or opens a sidebar item's songs). Clicking the progress bar jumps to that
-point in the song. The wheel scrolls the pane it's over.
+point in the song; dragging along it moves a preview of the position, and the song jumps there
+when you let go. The wheel scrolls the pane it's over.
 
 Because foldly uses the mouse, selecting text on screen needs a modifier in most terminals:
 Shift-drag (or Option-drag in macOS Terminal and iTerm2).
