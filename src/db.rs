@@ -73,12 +73,17 @@ pub struct Track {
 impl Track {
     /// "Artist — Title", falling back to the file name when tags are missing.
     pub fn label(&self) -> String {
-        let stem = Path::new(&self.rel_path).file_stem().map(|s| s.to_string_lossy().into_owned());
-        let title = self.title.clone().or(stem).unwrap_or_else(|| self.rel_path.clone());
+        let title = self.display_title();
         match &self.artist {
             Some(artist) => format!("{artist} — {title}"),
             None => title,
         }
+    }
+
+    /// The title tag, or the file name without its extension.
+    pub fn display_title(&self) -> String {
+        let stem = Path::new(&self.rel_path).file_stem().map(|s| s.to_string_lossy().into_owned());
+        self.title.clone().or(stem).unwrap_or_else(|| self.rel_path.clone())
     }
 }
 

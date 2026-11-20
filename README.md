@@ -90,7 +90,8 @@ move it. The focused pane is the one with the heavy, coloured border (every othe
 dimmed), and an empty songs list says why it's empty and how to fill it.
 
 `All Tracks` lists everything as "Artist — Title", ordered by artist, album, disc and track
-number; files without tags show their file name. Playlists list their tracks in playlist order.
+number; files without tags show their file name. Each row ends with the song's length (the queue
+shows lengths too). When a row is too narrow, the artist is shortened before the title. Playlists list their tracks in playlist order.
 
 Subfolders inside your music folder are scanned too, but foldly doesn't show the real folder
 tree: playlists are how you organise.

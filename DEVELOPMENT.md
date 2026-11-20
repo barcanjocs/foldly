@@ -100,8 +100,8 @@ from its scope note alone, without re-deriving context.
       captured, but ALSA's C library can still print to stderr; `Ctrl-L`
       repairs the screen. If it happens often, redirect stderr (fd 2) to a
       log file while the TUI is up.
-- [ ] **L. Track durations in lists** (tiny). Right-align `mm:ss` in the
-      songs and queue rows; durations are already in `Track::duration`.
+- [x] **L. Track durations in lists** — done 2026-11-20: right-aligned in
+      songs and queue rows, display-width aware.
 - [ ] **M. Cover art** (medium). Show the selected song's embedded art
       (lofty) or a `cover.jpg` beside it in the info pane, with
       `ratatui-image` (kitty/sixel/iTerm protocols, halfblocks fallback).
@@ -122,6 +122,8 @@ from its scope note alone, without re-deriving context.
     be the track that just finished.
   - The songs list marks every row of the playing track with ♪, so a track
     listed twice in a playlist shows two.
+  - `fit_row` treats the highlight symbol's column as always reserved, so
+    with nothing selected rows end one column short of the border.
   - Progress events trigger a full `reload` of the current list every 200
     files; fine so far, but rebuilds every filter haystack each time.
   - The `HELP` table in ui.rs is maintained by hand alongside

@@ -622,6 +622,7 @@ dependencies = [
  "ratatui",
  "rodio",
  "rusqlite",
+ "unicode-width",
  "walkdir",
 ]
 

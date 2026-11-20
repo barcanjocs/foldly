@@ -9,6 +9,8 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::app::{App, Details, InputPurpose, Location, Mode, Pane, PaneRects, Repeat, location_name};
 
 const ACCENT: Color = Color::Cyan;
@@ -140,18 +142,14 @@ fn empty_songs_message(app: &App) -> Vec<Line<'static>> {
 }
 
 fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
-    // Counts right-aligned: the row is the inner width minus the highlight symbol.
-    let row_width = usize::from(area.width.saturating_sub(3));
+    let width = list_row_width(area, true);
     let items: Vec<ListItem> = app
         .sidebar
         .iter()
         .map(|item| {
-            let count = item.count.to_string();
-            let name_width = row_width.saturating_sub(count.chars().count() + 1);
-            let name: String = location_name(&item.location).chars().take(name_width).collect();
-            let gap = row_width.saturating_sub(name.chars().count() + count.chars().count()).max(1);
+            let (name, gap, count) = fit_row(location_name(&item.location), &item.count.to_string(), width);
             let name = if item.location == Location::AllTracks { Span::raw(name).bold() } else { Span::raw(name) };
-            ListItem::new(Line::from(vec![name, Span::raw(" ".repeat(gap)), Span::raw(count).dark_gray()]))
+            ListItem::new(Line::from(vec![name, Span::raw(gap), Span::raw(count).dark_gray()]))
         })
         .collect();
     let (block, highlight) = pane_block(app, Pane::Sidebar, " Library ".into());
@@ -162,17 +160,18 @@ fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn draw_songs(frame: &mut Frame, app: &mut App, area: Rect) {
     let playing = app.now_playing.as_ref().map(|t| t.id);
+    let width = list_row_width(area, true);
     let items: Vec<ListItem> = (0..app.visible.len())
         .filter_map(|i| app.track(i))
         .map(|t| {
-            let line = if t.missing {
-                Line::from(format!("  {}  (missing)", t.label())).dark_gray()
+            let style = if t.missing {
+                Style::new().dark_gray()
             } else if Some(t.id) == playing {
-                Line::from(format!("♪ {}", t.label())).bold().green()
+                Style::new().bold().green()
             } else {
-                Line::from(format!("  {}", t.label()))
+                Style::new()
             };
-            ListItem::new(line)
+            ListItem::new(track_row(t, Some(t.id) == playing && !t.missing, style, width))
         })
         .collect();
 
@@ -187,6 +186,79 @@ fn draw_songs(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     let list = List::new(items).block(block).highlight_style(highlight).highlight_symbol("▌");
     frame.render_stateful_widget(list, area, &mut app.list_state);
+}
+
+/// Columns available to a list row: inside the border, minus the highlight symbol if the list
+/// has one.
+fn list_row_width(area: Rect, highlight_symbol: bool) -> usize {
+    usize::from(area.width.saturating_sub(2 + u16::from(highlight_symbol)))
+}
+
+/// A song row: `♪` when it's the current track, "Artist — Title", and its length (or
+/// "missing") right-aligned and dimmed.
+fn track_row(t: &crate::db::Track, current: bool, style: Style, width: usize) -> Line<'static> {
+    let right = if t.missing { "missing".to_string() } else { t.duration.map(fmt_time).unwrap_or_default() };
+    // Room for the label: the row, minus the `♪ ` column and the length with its gap.
+    let room = width.saturating_sub(2 + if right.is_empty() { 0 } else { right.width() + 1 });
+    let left = format!("{} {}", if current { '♪' } else { ' ' }, fitted_label(t, room));
+    let (left, gap, right) = fit_row(&left, &right, width);
+    Line::from(vec![Span::styled(left, style), Span::raw(gap), Span::raw(right).dark_gray()])
+}
+
+/// "Artist — Title" in at most `room` columns. When it doesn't fit, the artist is shortened
+/// first, since the title is what tells songs apart; if not even a few letters of the artist
+/// fit, it's dropped and the title alone is cut to fit.
+fn fitted_label(t: &crate::db::Track, room: usize) -> String {
+    const SEPARATOR: &str = " — ";
+    const MIN_ARTIST: usize = 4;
+    let title = t.display_title();
+    let Some(artist) = &t.artist else { return truncate_to_width(&title, room) };
+    let full = format!("{artist}{SEPARATOR}{title}");
+    if full.width() <= room {
+        return full;
+    }
+    match room.checked_sub(title.width() + SEPARATOR.width()) {
+        Some(artist_room) if artist_room >= MIN_ARTIST => {
+            format!("{}{SEPARATOR}{title}", truncate_to_width(artist, artist_room))
+        }
+        _ => truncate_to_width(&title, room),
+    }
+}
+
+/// Lays out a row `width` columns wide: `left`, cut with `…` if needed, and `right` against the
+/// right edge with at least one space between. Measured in display columns, so wide characters
+/// (CJK, emoji) line up. If even a cut-down left side wouldn't leave room, `right` is dropped.
+fn fit_row(left: &str, right: &str, width: usize) -> (String, String, String) {
+    let right_width = right.width();
+    if right.is_empty() || width < right_width + 3 {
+        return (truncate_to_width(left, width), String::new(), String::new());
+    }
+    let left = truncate_to_width(left, width - right_width - 1);
+    let gap = width - left.width() - right_width;
+    (left, " ".repeat(gap), right.to_string())
+}
+
+/// `s` cut to at most `max` display columns, ending in `…` when anything was cut.
+fn truncate_to_width(s: &str, max: usize) -> String {
+    if s.width() <= max {
+        return s.to_string();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > max {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    if max > 0 {
+        // "Paranoid…", not "Paranoid …".
+        out.truncate(out.trim_end().len());
+        out.push('…');
+    }
+    out
 }
 
 /// Below these sizes the info pane is hidden and the queue takes the whole right column.
@@ -303,16 +375,17 @@ fn draw_queue(frame: &mut Frame, app: &App, area: Rect) {
     // Only build the rows that fit; a queue can hold the whole library.
     let rows = area.height.saturating_sub(2) as usize;
     let start = queue_window_start(current, app.queue.len(), rows);
+    let width = list_row_width(area, false);
     let items: Vec<ListItem> = app.queue[start..(start + rows).min(app.queue.len())]
         .iter()
         .enumerate()
         .map(|(offset, track)| {
-            let line = match (start + offset).cmp(&current) {
-                std::cmp::Ordering::Less => Line::from(format!("  {}", track.label())).dark_gray(),
-                std::cmp::Ordering::Equal => Line::from(format!("♪ {}", track.label())).bold().green(),
-                std::cmp::Ordering::Greater => Line::from(format!("  {}", track.label())),
+            let (style, current) = match (start + offset).cmp(&current) {
+                std::cmp::Ordering::Less => (Style::new().dark_gray(), false),
+                std::cmp::Ordering::Equal => (Style::new().bold().green(), true),
+                std::cmp::Ordering::Greater => (Style::new(), false),
             };
-            ListItem::new(line)
+            ListItem::new(track_row(track, current, style, width))
         })
         .collect();
     frame.render_widget(List::new(items).block(block), area);
@@ -495,6 +568,46 @@ fn display_path(path: &std::path::Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::queue_window_start;
+
+    #[test]
+    fn labels_shorten_the_artist_before_the_title() {
+        use super::fitted_label;
+        let t = crate::db::Track {
+            id: 1,
+            rel_path: "x.mp3".into(),
+            title: Some("Paranoid Android".into()),
+            artist: Some("Radiohead".into()),
+            album: None,
+            duration: None,
+            missing: false,
+            entry_id: None,
+        };
+        assert_eq!(fitted_label(&t, 40), "Radiohead — Paranoid Android");
+        assert_eq!(fitted_label(&t, 25), "Radio… — Paranoid Android", "artist cut first");
+        assert_eq!(fitted_label(&t, 20), "Paranoid Android", "no room for 4 artist columns: title alone");
+        assert_eq!(fitted_label(&t, 10), "Paranoid…");
+        let untagged = crate::db::Track { title: None, artist: None, rel_path: "dir/My Song.mp3".into(), ..t };
+        assert_eq!(fitted_label(&untagged, 40), "My Song");
+    }
+
+    #[test]
+    fn rows_fit_their_width() {
+        use super::{fit_row, truncate_to_width};
+        use unicode_width::UnicodeWidthStr;
+        let joined = |(l, g, r): (String, String, String)| format!("{l}{g}{r}");
+
+        assert_eq!(joined(fit_row("Radiohead — Airbag", "4:44", 30)), "Radiohead — Airbag        4:44");
+        assert_eq!(joined(fit_row("Radiohead — Paranoid Android", "06:23", 20)), "Radiohead — P… 06:23");
+        // Wide characters take two columns each and still line up.
+        let row = joined(fit_row("坂本龍一 — Merry Christmas", "05:12", 20));
+        assert_eq!((row.width(), row.as_str()), (20, "坂本龍一 — Me… 05:12"));
+        // Too narrow for the right side: just the cut left side.
+        assert_eq!(joined(fit_row("Radiohead", "06:23", 6)), "Radio…");
+        assert_eq!(joined(fit_row("Radiohead", "", 20)), "Radiohead");
+        // A wide character never gets split.
+        assert_eq!(truncate_to_width("日本語", 4), "日…");
+        assert_eq!(truncate_to_width("abc", 0), "");
+    }
 
     #[test]
     fn sample_rates() {

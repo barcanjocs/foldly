@@ -407,7 +407,17 @@ files).
   right-aligned (the row width is the inner width minus the highlight symbol).
 - **Songs** — a `List` with `▌` as the highlight symbol, titled with the
   source's name; scan progress goes in a right-aligned top title. `♪` green
-  bold marks the playing track, dimmed `(missing)` tracks.
+  bold marks the playing track; missing tracks are dimmed.
+
+**Row layout.** Song rows (songs list and queue) come from `track_row`: the
+`♪` column, `fitted_label`, and the length (or `missing`) right-aligned and
+dimmed; sidebar rows use the same `fit_row` for their counts. Everything is
+measured in display columns (`unicode-width`), so wide characters line up,
+and `truncate_to_width` never splits one and ends cuts in `…` (trailing spaces
+trimmed first). `fitted_label` shortens the artist before the title, since
+the title tells songs apart; with under 4 columns left for the artist it shows
+the title alone. `list_row_width` is the inner width minus the highlight
+symbol for lists that have one.
 - **Right column** — when the screen is at least `INFO_MIN_SCREEN_WIDTH` (100)
   wide and the column at least `INFO_MIN_COLUMN_HEIGHT` (16) tall, it is
   split in half: the info pane (`draw_info`, a wrapping `Paragraph` titled
@@ -479,7 +489,9 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   `track_details` and `playlists_containing` (distinct, alphabetical), and
   upgrading an original-layout database file (version, `size` reset,
   playlists kept, nothing re-run on the next open).
-- *ui.rs* (sample-rate formatting) and the queue scrolling rules.
+- *ui.rs* — sample-rate formatting, the queue scrolling rules, row fitting
+  (`fit_row`, `truncate_to_width`, wide characters) and `fitted_label`
+  (artist shortened before the title).
 - *scan.rs* — a real temp folder with dummy files: hidden files/folders and
   non-audio skipped, unchanged files not re-read, a vanished file marked
   missing but kept in its playlist, and restored when it returns.
