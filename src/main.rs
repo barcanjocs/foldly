@@ -6,6 +6,7 @@ mod db;
 mod filter;
 mod media;
 mod player;
+mod queue;
 mod scan;
 mod ui;
 mod watch;

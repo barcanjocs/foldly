@@ -18,6 +18,7 @@ use crate::db::{self, Playlist, Track, TrackDetails};
 use crate::filter::Filter;
 use crate::media::{NowPlaying, PlayState};
 use crate::player::Player;
+use crate::queue::{self, Queue, RemoveError};
 use crate::scan::{self, ScanEvent};
 use crate::watch::Watch;
 
@@ -190,15 +191,9 @@ pub struct App {
     details_key: Option<DetailsKey>,
 
     /// What plays, in play order (shuffled when shuffle is on).
-    pub queue: Vec<Track>,
-    pub queue_index: Option<usize>,
-    /// The queue pane's selection; `None` means "on the current track", which is where it
-    /// goes back to whenever the queue is rebuilt.
-    queue_selected: Option<usize>,
+    pub queue: Queue,
     /// First queue row the last frame showed, for mouse clicks. Set by `ui::draw`.
     pub queue_offset: usize,
-    /// The queue in its original order, restored when shuffle is turned off.
-    unshuffled: Vec<Track>,
     pub shuffle: bool,
     pub repeat: Repeat,
     pub now_playing: Option<Track>,
@@ -251,12 +246,9 @@ impl App {
             mode: Mode::Normal,
             details: None,
             details_key: None,
-            queue: Vec::new(),
-            unshuffled: Vec::new(),
+            queue: Queue::default(),
             shuffle: false,
             repeat: Repeat::Off,
-            queue_index: None,
-            queue_selected: None,
             queue_offset: 0,
             now_playing: None,
             player,
@@ -398,12 +390,7 @@ impl App {
 
     fn move_in(&mut self, pane: Pane, delta: isize) {
         match pane {
-            Pane::Queue => {
-                if let Some(cursor) = self.queue_cursor() {
-                    let last = self.queue.len() as isize - 1;
-                    self.queue_selected = Some((cursor as isize + delta).clamp(0, last) as usize);
-                }
-            }
+            Pane::Queue => self.queue.move_cursor(delta),
             Pane::Songs => {
                 let current = self.list_state.selected().unwrap_or(0) as isize;
                 self.select((current + delta).max(0) as usize);
@@ -437,13 +424,6 @@ impl App {
             Pane::Sidebar => self.select_source(self.sidebar.len() - 1),
             Pane::Queue => self.move_in(Pane::Queue, isize::MAX / 2),
         }
-    }
-
-    /// The queue pane's selected row: the chosen one, else the current track. `None` when
-    /// nothing is loaded.
-    pub fn queue_cursor(&self) -> Option<usize> {
-        self.queue_index?;
-        self.queue_selected.filter(|&i| i < self.queue.len()).or(self.queue_index)
     }
 
     // --- focus ----------------------------------------------------------------------------
@@ -481,9 +461,9 @@ impl App {
             }
             Pane::Queue => {
                 // Jump to the selected track; the cursor then follows the current one again.
-                if let Some(i) = self.queue_cursor() {
+                if let Some(i) = self.queue.cursor() {
                     self.play_index(i);
-                    self.queue_selected = None;
+                    self.queue.follow_current();
                 }
                 return;
             }
@@ -493,18 +473,10 @@ impl App {
             Some(t) if t.missing => Err(anyhow::anyhow!("{} is missing from the music folder", t.rel_path)),
             Some(chosen) => {
                 // Queue everything playable in this (filtered) list, starting at the chosen track.
-                let chosen = queue_key(chosen);
-                self.unshuffled =
-                    self.visible.iter().map(|&i| &self.tracks[i]).filter(|t| !t.missing).cloned().collect();
-                let start = self.unshuffled.iter().position(|t| queue_key(t) == chosen).unwrap_or(0);
-                self.queue_selected = None;
-                if self.shuffle {
-                    self.queue = shuffled_from(&self.unshuffled, start);
-                    self.play_index(0);
-                } else {
-                    self.queue = self.unshuffled.clone();
-                    self.play_index(start);
-                }
+                let chosen = queue::key(chosen);
+                let list = self.visible.iter().map(|&i| &self.tracks[i]).filter(|t| !t.missing).cloned().collect();
+                let start = self.queue.start(list, chosen, self.shuffle);
+                self.play_index(start);
                 Ok(())
             }
             None => Ok(()),
@@ -521,10 +493,10 @@ impl App {
 
     /// Opens the playlist picker for the selected track (in the songs list or the queue).
     pub fn start_add_to_playlist(&mut self) {
-        match (self.focus, self.selected_track().map(|t| t.id), self.queue_cursor()) {
+        match (self.focus, self.selected_track().map(|t| t.id), self.queue.cursor_track().map(|t| t.id)) {
             (Pane::Songs, Some(id), _) => self.open_picker(vec![id], false, true),
             // Queued tracks may come from anywhere, so the shown playlist is offered too.
-            (Pane::Queue, _, Some(i)) => self.open_picker(vec![self.queue[i].id], false, false),
+            (Pane::Queue, _, Some(id)) => self.open_picker(vec![id], false, false),
             _ => self.message = Some("select a song to add it to a playlist (A adds the whole list)".into()),
         }
     }
@@ -533,7 +505,7 @@ impl App {
     /// queue when the queue is focused.
     pub fn start_add_all_to_playlist(&mut self) {
         if self.focus == Pane::Queue {
-            let ids: Vec<i64> = self.queue.iter().map(|t| t.id).collect();
+            let ids: Vec<i64> = self.queue.tracks().iter().map(|t| t.id).collect();
             if ids.is_empty() {
                 self.message = Some("the queue is empty".into());
             } else {
@@ -627,59 +599,28 @@ impl App {
         }
     }
 
-    // --- queue editing --------------------------------------------------------------------
-    //
-    // `queue` is the play order and `unshuffled` the original order of the same tracks. With
-    // shuffle off they're in the same order, so moves apply to both; with shuffle on, a move
-    // only changes the play order. Removals always apply to both.
+    // --- queue editing (the rules live in queue.rs) ---------------------------------------
 
-    /// Removes the selected track from the queue. The current track can't be removed (skip it
-    /// with `n`), so `queue_index` always points at what's playing.
     fn queue_remove(&mut self) {
-        let (Some(i), Some(current)) = (self.queue_cursor(), self.queue_index) else { return };
-        if i == current {
+        if self.queue.remove_selected() == Err(RemoveError::Playing) {
             self.message = Some("that's the song playing; n skips it".into());
-            return;
         }
-        let removed = queue_key(&self.queue.remove(i));
-        self.unshuffled.retain(|t| queue_key(t) != removed);
-        if i < current {
-            self.queue_index = Some(current - 1);
-        }
-        self.queue_selected = Some(i.min(self.queue.len() - 1));
     }
 
-    /// Moves the selected queue track later (+1) or earlier (-1); the selection moves with it.
     fn queue_move(&mut self, delta: isize) {
-        let (Some(i), Some(current)) = (self.queue_cursor(), self.queue_index) else { return };
-        let Some(j) = i.checked_add_signed(delta).filter(|&j| j < self.queue.len()) else { return };
-        self.queue.swap(i, j);
-        if !self.shuffle {
-            self.unshuffled.swap(i, j);
-        }
-        self.queue_index = Some(if current == i {
-            j
-        } else if current == j {
-            i
-        } else {
-            current
-        });
-        self.queue_selected = Some(j);
+        self.queue.move_selected(delta, self.shuffle);
     }
 
     /// `c`: drops everything queued after the current track.
     pub fn queue_clear_upcoming(&mut self) {
-        let Some(current) = self.queue_index else { return };
-        let dropped = self.queue.len() - current - 1;
-        if dropped == 0 {
-            self.message = Some("nothing queued after this song".into());
+        if self.queue.current().is_none() {
             return;
         }
-        self.queue.truncate(current + 1);
-        let kept: std::collections::HashSet<_> = self.queue.iter().map(queue_key).collect();
-        self.unshuffled.retain(|t| kept.contains(&queue_key(t)));
-        self.queue_selected = None;
-        self.message = Some(format!("cleared {dropped} upcoming {}", if dropped == 1 { "song" } else { "songs" }));
+        self.message = Some(match self.queue.clear_upcoming() {
+            0 => "nothing queued after this song".into(),
+            1 => "cleared 1 upcoming song".into(),
+            n => format!("cleared {n} upcoming songs"),
+        });
     }
 
     // --- prompts --------------------------------------------------------------------------
@@ -759,7 +700,7 @@ impl App {
                     let mut track = track;
                     track.duration = track.duration.or(decoder_duration);
                     self.now_playing = Some(track);
-                    self.queue_index = Some(index);
+                    self.queue.set_current(Some(index));
                     self.message = None;
                     // A drag on the bar was aimed at the previous track.
                     self.scrub = None;
@@ -777,20 +718,19 @@ impl App {
     /// Skips to the next track. Past the end of the queue, repeat-all starts it again
     /// (reshuffled when shuffle is on); otherwise playback stops.
     pub fn next(&mut self) {
-        let Some(i) = self.queue_index else { return };
+        let Some(i) = self.queue.current() else { return };
         if i + 1 < self.queue.len() || self.repeat != Repeat::All {
             self.play_index(i + 1);
         } else {
             if self.shuffle {
-                self.queue = shuffled_from(&self.unshuffled, fastrand::usize(..self.unshuffled.len()));
-                self.queue_selected = None;
+                self.queue.reshuffle();
             }
             self.play_index(0);
         }
     }
 
     pub fn previous(&mut self) {
-        let Some(i) = self.queue_index else { return };
+        let Some(i) = self.queue.current() else { return };
         // Like most players: restart the track unless we're near its start.
         if self.player.position() > Duration::from_secs(3) {
             self.play_index(i);
@@ -889,9 +829,7 @@ impl App {
             match pane {
                 Pane::Sidebar if index < self.sidebar.len() => self.select_source(index),
                 Pane::Songs if index < self.visible.len() => self.select(index),
-                Pane::Queue if self.queue_index.is_some() && index < self.queue.len() => {
-                    self.queue_selected = Some(index)
-                }
+                Pane::Queue if self.queue.select(index) => {}
                 _ => return,
             }
             let double = self
@@ -991,21 +929,12 @@ impl App {
         let result = db::set_setting(&self.conn, SHUFFLE_SETTING, if self.shuffle { "1" } else { "0" });
         self.report(result);
 
-        let Some(current) = self.queue_index.and_then(|i| self.queue.get(i)).map(queue_key) else { return };
-        let position = self.unshuffled.iter().position(|t| queue_key(t) == current).unwrap_or(0);
-        if self.shuffle {
-            self.queue = shuffled_from(&self.unshuffled, position);
-            self.queue_index = Some(0);
-        } else {
-            self.queue = self.unshuffled.clone();
-            self.queue_index = Some(position);
-        }
-        self.queue_selected = None;
+        self.queue.set_shuffle(self.shuffle);
     }
 
     pub fn stop(&mut self) {
         self.player.stop();
-        self.queue_index = None;
+        self.queue.set_current(None);
         self.now_playing = None;
     }
 
@@ -1022,7 +951,7 @@ impl App {
         }
         self.poll_watch();
         if self.player.finished() {
-            match (self.repeat, self.queue_index) {
+            match (self.repeat, self.queue.current()) {
                 (Repeat::One, Some(i)) => self.play_index(i),
                 _ => self.next(),
             }
@@ -1040,8 +969,8 @@ impl App {
     /// Recomputes the info pane when the selection, focus or source changed since last time.
     fn refresh_details(&mut self) {
         let track = match self.focus {
-            Pane::Queue => self.queue_cursor().map(|i| queue_key(&self.queue[i])),
-            _ => self.selected_track().map(queue_key),
+            Pane::Queue => self.queue.cursor_track().map(queue::key),
+            _ => self.selected_track().map(queue::key),
         };
         let key = DetailsKey { focus: self.focus, source: self.location.clone(), track };
         if self.details_key.as_ref() == Some(&key) {
@@ -1129,10 +1058,10 @@ impl App {
             Location::AllTracks => "all".to_string(),
             Location::Playlist { id, .. } => format!("playlist:{id}"),
         };
-        let queue = (encode_keys(&self.queue), encode_keys(&self.unshuffled));
+        let queue = self.queue.encode();
         let tx = self.conn.unchecked_transaction()?;
         db::set_setting(&tx, SESSION_LOCATION, &location)?;
-        match self.queue_index.filter(|_| self.player.is_active()) {
+        match self.queue.current().filter(|_| self.player.is_active()) {
             Some(index) => {
                 db::set_setting(&tx, SESSION_INDEX, &index.to_string())?;
                 db::set_setting(&tx, SESSION_POSITION_MS, &self.player.position().as_millis().to_string())?;
@@ -1175,32 +1104,22 @@ impl App {
 
         let Some(index) = index else { return Ok(()) };
         let tracks = db::tracks_by_id(&self.conn)?;
-        let rebuild = |keys: &str| -> Vec<Track> {
-            decode_keys(keys)
-                .into_iter()
-                .filter_map(|(id, entry_id)| {
-                    let track = tracks.get(&id).filter(|t| !t.missing)?;
-                    Some(Track { entry_id, ..track.clone() })
-                })
-                .collect()
-        };
-        let current = decode_keys(&queue).get(index).copied();
-        self.queue = rebuild(&queue);
-        self.queue_selected = None;
-        self.unshuffled = unshuffled.map_or_else(|| self.queue.clone(), |keys| rebuild(&keys));
-        self.saved_queue = Some((encode_keys(&self.queue), encode_keys(&self.unshuffled)));
-
-        let Some(at) = current.and_then(|key| self.queue.iter().position(|t| queue_key(t) == key)) else {
+        let find = |id: i64| tracks.get(&id).filter(|t| !t.missing).cloned();
+        let (restored, at) = Queue::restore(&queue, unshuffled.as_deref(), Some(index), find);
+        self.queue = restored;
+        self.saved_queue = Some(self.queue.encode());
+        let Some(at) = at else {
             return Ok(()); // the current track's file is gone; keep the queue, load nothing
         };
-        let track = self.queue[at].clone();
+        let track = self.queue.tracks()[at].clone();
         match self.player.load_paused(&self.root.join(&track.rel_path), position.unwrap_or_default()) {
             Ok(decoder_duration) => {
-                if let Some(row) = self.visible.iter().position(|&i| queue_key(&self.tracks[i]) == queue_key(&track)) {
+                if let Some(row) = self.visible.iter().position(|&i| queue::key(&self.tracks[i]) == queue::key(&track))
+                {
                     self.select(row);
                 }
                 self.now_playing = Some(Track { duration: track.duration.or(decoder_duration), ..track });
-                self.queue_index = Some(at);
+                self.queue.set_current(Some(at));
                 self.message = Some("picked up where you left off; Space plays".into());
             }
             Err(err) => self.message = Some(format!("{err:#}")),
@@ -1276,39 +1195,8 @@ const SESSION_INDEX: &str = "session_index";
 const SESSION_POSITION_MS: &str = "session_position_ms";
 const SESSION_SAVE_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Queue items as `id` or `id:entry` (inside a playlist), comma-separated.
-fn encode_keys(tracks: &[Track]) -> String {
-    let key = |t: &Track| match t.entry_id {
-        Some(entry) => format!("{}:{entry}", t.id),
-        None => t.id.to_string(),
-    };
-    tracks.iter().map(key).collect::<Vec<_>>().join(",")
-}
-
-/// The reverse of `encode_keys`, skipping anything malformed.
-fn decode_keys(keys: &str) -> Vec<(i64, Option<i64>)> {
-    keys.split(',')
-        .filter_map(|key| match key.split_once(':') {
-            Some((id, entry)) => Some((id.parse().ok()?, Some(entry.parse().ok()?))),
-            None => Some((key.parse().ok()?, None)),
-        })
-        .collect()
-}
-
 /// Two clicks on the same row at most this far apart are a double-click.
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
-
-/// Identifies a queue item; the entry id tells apart repeats of a track within a playlist.
-fn queue_key(t: &Track) -> (i64, Option<i64>) {
-    (t.id, t.entry_id)
-}
-
-/// `tracks[first]` followed by all the other tracks in random order.
-fn shuffled_from(tracks: &[Track], first: usize) -> Vec<Track> {
-    let mut rest: Vec<Track> = tracks.iter().enumerate().filter(|&(i, _)| i != first).map(|(_, t)| t.clone()).collect();
-    fastrand::shuffle(&mut rest);
-    tracks.get(first).cloned().into_iter().chain(rest).collect()
-}
 
 fn added_message(added: usize, requested: usize, playlist: &str) -> String {
     let tracks = if added == 1 { "track" } else { "tracks" };
@@ -1328,41 +1216,6 @@ pub fn location_name(location: &Location) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn track(id: i64) -> Track {
-        Track {
-            id,
-            rel_path: format!("{id}.mp3"),
-            title: None,
-            artist: None,
-            album: None,
-            duration: None,
-            missing: false,
-            entry_id: None,
-        }
-    }
-
-    #[test]
-    fn session_keys_round_trip() {
-        let tracks = vec![track(3), Track { entry_id: Some(17), ..track(5) }, track(9)];
-        assert_eq!(encode_keys(&tracks), "3,5:17,9");
-        assert_eq!(decode_keys("3,5:17,9"), [(3, None), (5, Some(17)), (9, None)]);
-        assert_eq!(decode_keys(""), []);
-        assert_eq!(decode_keys("4,x,5:y,6:7"), [(4, None), (6, Some(7))], "malformed keys skipped");
-    }
-
-    #[test]
-    fn shuffled_from_keeps_the_chosen_track_first() {
-        let tracks: Vec<Track> = (0..50).map(track).collect();
-        for first in [0, 7, 49] {
-            let queue = shuffled_from(&tracks, first);
-            assert_eq!(queue[0].id, first as i64);
-            let mut ids: Vec<i64> = queue.iter().map(|t| t.id).collect();
-            assert_ne!(ids[1..], (0..50).filter(|&i| i != first as i64).collect::<Vec<_>>()[..], "should be shuffled");
-            ids.sort();
-            assert_eq!(ids, (0..50).collect::<Vec<_>>(), "same tracks, each once");
-        }
-    }
 
     /// Needs an audio device and the same fixtures as `playlists_as_virtual_folders`
     /// (copied, not modified); run with `FOLDLY_TEST_DIR=<dir> cargo test -- --ignored`.
@@ -1592,7 +1445,7 @@ mod tests {
         app.player.seek_by(2);
         for _ in 0..30 {
             app.tick();
-            if app.queue_index == Some(1) {
+            if app.queue.current() == Some(1) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(100));
@@ -1601,24 +1454,24 @@ mod tests {
 
         // Shuffle on mid-track: the current track stays and plays first; the queue holds the
         // same tracks. Off again: original playlist order, still on the current track.
-        let ordered: Vec<_> = app.queue.iter().map(|t| t.title.clone()).collect();
+        let ordered: Vec<_> = app.queue.tracks().iter().map(|t| t.title.clone()).collect();
         app.toggle_shuffle();
-        assert_eq!(app.queue_index, Some(0));
-        assert_eq!(app.queue[0].title.as_deref(), Some("Tone 3"));
-        let mut shuffled: Vec<_> = app.queue.iter().map(|t| t.title.clone()).collect();
+        assert_eq!(app.queue.current(), Some(0));
+        assert_eq!(app.queue.tracks()[0].title.as_deref(), Some("Tone 3"));
+        let mut shuffled: Vec<_> = app.queue.tracks().iter().map(|t| t.title.clone()).collect();
         shuffled.sort();
         let mut expected = ordered.clone();
         expected.sort();
         assert_eq!(shuffled, expected);
         app.toggle_shuffle();
-        assert_eq!(app.queue.iter().map(|t| t.title.clone()).collect::<Vec<_>>(), ordered);
-        assert_eq!(app.queue[app.queue_index.unwrap()].title.as_deref(), Some("Tone 3"));
+        assert_eq!(app.queue.tracks().iter().map(|t| t.title.clone()).collect::<Vec<_>>(), ordered);
+        assert_eq!(app.queue.tracks()[app.queue.current().unwrap()].title.as_deref(), Some("Tone 3"));
 
         // Repeat one: when Tone 3 ends it plays again.
         app.cycle_repeat();
         app.cycle_repeat();
         assert_eq!(app.repeat, Repeat::One);
-        let index = app.queue_index;
+        let index = app.queue.current();
         app.player.seek_by(2);
         std::thread::sleep(Duration::from_millis(100));
         let mut replayed = false;
@@ -1632,7 +1485,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         assert!(replayed, "track should restart");
-        assert_eq!(app.queue_index, index);
+        assert_eq!(app.queue.current(), index);
 
         // Repeat all: next past the last track wraps to the first, previous wraps back.
         app.cycle_repeat();
@@ -1641,16 +1494,16 @@ mod tests {
         let last = app.queue.len() - 1;
         app.play_index(last);
         app.next();
-        assert_eq!(app.queue_index, Some(0));
+        assert_eq!(app.queue.current(), Some(0));
         app.previous();
-        assert_eq!(app.queue_index, Some(last));
+        assert_eq!(app.queue.current(), Some(last));
 
         // Repeat off: next past the end stops.
         app.cycle_repeat();
         app.cycle_repeat();
         assert_eq!(app.repeat, Repeat::Off);
         app.next();
-        assert_eq!(app.queue_index, None);
+        assert_eq!(app.queue.current(), None);
         app.play_index(1);
 
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
@@ -1666,13 +1519,13 @@ mod tests {
         app.player.inject_error(rodio::cpal::ErrorKind::DeviceChanged);
         app.tick();
         assert!(app.message.is_none() && !app.needs_full_redraw);
-        let (index, before) = (app.queue_index, app.player.position());
+        let (index, before) = (app.queue.current(), app.player.position());
         app.player.toggle_pause();
         app.player.inject_error(rodio::cpal::ErrorKind::DeviceNotAvailable);
         app.tick();
         assert_eq!(app.message.as_deref(), Some("audio output changed; reconnected to the default device"));
         assert!(app.needs_full_redraw);
-        assert_eq!(app.queue_index, index, "same track");
+        assert_eq!(app.queue.current(), index, "same track");
         assert!(app.player.is_paused(), "still paused");
         let after = app.player.position();
         assert!(after + Duration::from_millis(300) >= before, "resumed at {after:?}, was {before:?}");
@@ -1812,7 +1665,7 @@ mod tests {
             app.select(0);
             app.activate_selected(); // Tone 1; queue Tone 1, Tone 3, Tone 2
             app.toggle_focus();
-            assert_eq!((app.focus, app.queue_cursor()), (Pane::Queue, Some(0)), "Tab: songs → queue, on the current");
+            assert_eq!((app.focus, app.queue.cursor()), (Pane::Queue, Some(0)), "Tab: songs → queue, on the current");
             app.move_selection(1);
             app.tick();
             assert!(
@@ -1820,16 +1673,19 @@ mod tests {
             );
 
             app.activate_selected();
-            assert_eq!((app.queue_index, app.queue_cursor()), (Some(1), Some(1)), "jumped to Tone 3");
+            assert_eq!((app.queue.current(), app.queue.cursor()), (Some(1), Some(1)), "jumped to Tone 3");
             app.move_entry(1);
-            assert_eq!(titles(&app.queue), ["Tone 1", "Tone 2", "Tone 3"]);
-            assert_eq!(titles(&app.unshuffled), titles(&app.queue), "shuffle off: both orders change");
-            assert_eq!((app.queue_index, app.queue_cursor()), (Some(2), Some(2)), "the playing song moved with it");
+            assert_eq!(titles(app.queue.tracks()), ["Tone 1", "Tone 2", "Tone 3"]);
+            assert_eq!(titles(app.queue.unshuffled()), titles(app.queue.tracks()), "shuffle off: both orders change");
+            assert_eq!((app.queue.current(), app.queue.cursor()), (Some(2), Some(2)), "the playing song moved with it");
 
             app.move_selection(-2);
             app.delete_selected();
-            assert_eq!((titles(&app.queue), app.queue_index), (vec!["Tone 2".to_string(), "Tone 3".into()], Some(1)));
-            assert_eq!(titles(&app.unshuffled), ["Tone 2", "Tone 3"]);
+            assert_eq!(
+                (titles(app.queue.tracks()), app.queue.current()),
+                (vec!["Tone 2".to_string(), "Tone 3".into()], Some(1))
+            );
+            assert_eq!(titles(app.queue.unshuffled()), ["Tone 2", "Tone 3"]);
             assert_eq!(app.now_playing.as_ref().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
             app.move_selection(1);
             app.delete_selected();
@@ -1840,7 +1696,7 @@ mod tests {
             app.activate_selected(); // Tone 2, with Tone 3 after it
             app.queue_clear_upcoming();
             assert_eq!(
-                (titles(&app.queue), app.message.as_deref()),
+                (titles(app.queue.tracks()), app.message.as_deref()),
                 (vec!["Tone 2".to_string()], Some("cleared 1 upcoming song"))
             );
             app.queue_clear_upcoming();
@@ -1853,11 +1709,11 @@ mod tests {
             app.toggle_shuffle();
             app.focus_pane(Pane::Queue);
             app.move_entry(1);
-            assert_eq!(app.queue_index, Some(1), "the playing song moved later");
-            assert_eq!(titles(&app.unshuffled), ["Tone 1", "Tone 3", "Tone 2"]);
+            assert_eq!(app.queue.current(), Some(1), "the playing song moved later");
+            assert_eq!(titles(app.queue.unshuffled()), ["Tone 1", "Tone 3", "Tone 2"]);
             app.toggle_shuffle();
             assert_eq!(
-                (titles(&app.queue), app.queue_index),
+                (titles(app.queue.tracks()), app.queue.current()),
                 (vec!["Tone 1".to_string(), "Tone 3".into(), "Tone 2".into()], Some(0))
             );
 
@@ -1871,9 +1727,9 @@ mod tests {
             println!("{}", terminal.backend());
             let t0 = Instant::now();
             app.mouse_down(q.x + 5, q.y + 3, t0);
-            assert_eq!((app.focus, app.queue_cursor()), (Pane::Queue, Some(2)));
+            assert_eq!((app.focus, app.queue.cursor()), (Pane::Queue, Some(2)));
             app.mouse_down(q.x + 5, q.y + 3, t0 + Duration::from_millis(150));
-            assert_eq!(app.queue_index, Some(2), "double-click jumped to Tone 2");
+            assert_eq!(app.queue.current(), Some(2), "double-click jumped to Tone 2");
             app.stop();
         }
 
@@ -1886,11 +1742,11 @@ mod tests {
         app.player.seek_by(1);
         std::thread::sleep(Duration::from_millis(200));
         let titles_of = |queue: &[Track]| queue.iter().map(|t| t.display_title()).collect::<Vec<_>>();
-        let (queue, before) = (titles_of(&app.queue), app.player.position());
+        let (queue, before) = (titles_of(app.queue.tracks()), app.player.position());
         app.save_session().unwrap();
         let resumed = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
         assert!(matches!(&resumed.location, Location::Playlist { name, .. } if name == "Mix 2"));
-        assert_eq!((titles_of(&resumed.queue), resumed.queue_index), (queue.clone(), Some(1)));
+        assert_eq!((titles_of(resumed.queue.tracks()), resumed.queue.current()), (queue.clone(), Some(1)));
         assert_eq!(resumed.now_playing.as_ref().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
         assert_eq!(resumed.selected_track().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
         assert!(resumed.player.is_paused(), "loaded paused");
@@ -1916,7 +1772,7 @@ mod tests {
         // A track whose file went missing meanwhile drops out of the restored queue.
         db::set_missing(&app.conn, "tone2.mp3", true).unwrap();
         let resumed = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
-        assert_eq!(titles_of(&resumed.queue), ["Tone 1", "Tone 3"]);
+        assert_eq!(titles_of(resumed.queue.tracks()), ["Tone 1", "Tone 3"]);
         assert_eq!(resumed.now_playing.as_ref().map(|t| t.display_title()).as_deref(), Some("Tone 3"));
         drop(resumed);
         db::set_missing(&app.conn, "tone2.mp3", false).unwrap();
@@ -1925,7 +1781,7 @@ mod tests {
         app.stop();
         app.save_session().unwrap();
         let resumed = App::new(app.root.clone(), db_path.clone(), Player::new().unwrap()).unwrap();
-        assert!(resumed.now_playing.is_none() && resumed.queue.is_empty());
+        assert!(resumed.now_playing.is_none() && resumed.queue.len() == 0);
         drop(resumed);
         app.select(1);
         app.activate_selected();

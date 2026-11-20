@@ -375,13 +375,13 @@ pub fn queue_window_start(current: usize, len: usize, rows: usize) -> usize {
 
 /// The play queue: played tracks dimmed, the current track highlighted, then what's next.
 fn draw_queue(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = match app.queue_index {
+    let title = match app.queue.current() {
         Some(i) => format!(" Queue {}/{} ", i + 1, app.queue.len()),
         None => " Queue ".to_string(),
     };
     let (block, highlight) = pane_block(app, Pane::Queue, title);
     let focused = app.focus == Pane::Queue;
-    let Some(current) = app.queue_index else {
+    let Some(current) = app.queue.current() else {
         let hint = Line::from("Press Enter on a track to play it and queue the rest of the list.").dark_gray();
         frame.render_widget(Paragraph::new(hint).wrap(ratatui::widgets::Wrap { trim: true }).block(block), area);
         return;
@@ -391,7 +391,7 @@ fn draw_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     let rows = area.height.saturating_sub(2) as usize;
     let mut start = queue_window_start(current, app.queue.len(), rows);
     // When focused, the selection may wander off the automatic window: scroll to keep it in view.
-    let cursor = app.queue_cursor().filter(|_| focused);
+    let cursor = app.queue.cursor().filter(|_| focused);
     if let Some(cursor) = cursor {
         if cursor < start {
             start = cursor;
@@ -401,7 +401,7 @@ fn draw_queue(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     app.queue_offset = start;
     let width = list_row_width(area, focused);
-    let items: Vec<ListItem> = app.queue[start..(start + rows).min(app.queue.len())]
+    let items: Vec<ListItem> = app.queue.tracks()[start..(start + rows).min(app.queue.len())]
         .iter()
         .enumerate()
         .map(|(offset, track)| {

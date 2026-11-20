@@ -57,6 +57,9 @@ the column rects in `App::panes` for the mouse).
   for which events matter, and the settle timer. Tests at the bottom.
 - **`filter.rs`** — `Filter`, a reusable nucleo `Matcher` with one method,
   `matches(query, haystacks, rank)`. Tests at the bottom.
+- **`queue.rs`** — `Queue`: play order, list order, current track and cursor,
+  with every edit that keeps them in step, and the session encoding. Tests
+  at the bottom.
 - **`media.rs`** — `NowPlaying`: souvlaki's `MediaControls`, the channel its
   commands arrive on, and change-only publishing of what's playing.
 - **`player.rs`** — `Player` wraps rodio: the device sink plus at most one
@@ -204,7 +207,7 @@ pub struct App {
     mode: Mode,                       // which prompt/popup is open
     sidebar_width, right_width,       // column widths in percent; songs get the rest
     panes: PaneRects, dragging,       // last frame's column rects; the divider being dragged
-    queue, queue_index, unshuffled,   // see "Queue" below
+    queue: Queue, queue_offset,       // see "Queue" below; first queue row drawn, for clicks
     shuffle, repeat, now_playing, player,
     message, scan_status, scan_rx, should_quit,
 }
@@ -235,7 +238,7 @@ songs list. `R` and `A` work from either, since both panes refer to the same
 `location`. `/` always focuses the songs list. A new empty playlist (`N`) is
 shown immediately by setting `location` before `reload`.
 
-Track identity within a list is `(track id, entry id)` (`queue_key`): the entry
+Track identity within a list is `(track id, entry id)` (`queue::key`): the entry
 id is `None` in All Tracks and the `playlist_tracks.id` inside a playlist,
 which is what distinguishes two occurrences of the same song.
 
@@ -321,55 +324,73 @@ before the TUI starts.
 
 ## Queue, shuffle, repeat
 
+### The queue (`queue.rs`)
+
+`Queue` holds:
+
 ```
-unshuffled: the playable tracks of the list Enter was pressed in, in list order
-queue:      the play order (== unshuffled, or a shuffle of it)
-queue_index: position in `queue` of the current track
+tracks:     the play order
+unshuffled: the same tracks in the order of the list Enter was pressed in
+current:    where the playing (or loaded) track is in `tracks`
+selected:   the queue pane's cursor; None = "on the current track"
 ```
 
-- **Enter on a track** builds `unshuffled` from the visible, non-missing
-  tracks. Without shuffle `queue = unshuffled` and play starts at the chosen
-  index; with shuffle `queue = shuffled_from(unshuffled, chosen)` (chosen
-  first, the rest `fastrand::shuffle`d) and play starts at 0.
-- **Toggling shuffle** finds the current track in `unshuffled` by `queue_key`;
-  on, it reshuffles around it (`queue_index = 0`); off, it restores
-  `queue = unshuffled` at that position. This is why `unshuffled` must be kept
-  in step with any change to the queue's contents.
-- **`next`** plays `queue_index + 1`; past the end, repeat-all reshuffles (if
+**Invariant:** `unshuffled` holds exactly the tracks of `tracks`; with shuffle
+off, in the same order. Turning shuffle off restores `tracks` from
+`unshuffled`, so every operation keeps the two in step, and they all live in
+`queue.rs` where they're unit-tested without an audio device. Tracks are
+identified by `queue::key`, `(track id, entry id)`: unique within a queue,
+since one is built from one list.
+
+- **`start(list, chosen, shuffle)`** (Enter on a song) replaces both orders.
+  Shuffled, `chosen` comes first and the rest are `fastrand::shuffle`d.
+  Returns the index to play.
+- **`set_shuffle(on)`** keeps the current track current: on, it reshuffles
+  around it (current becomes 0); off, it restores the list order at its
+  position. **`reshuffle`** is repeat-all's fresh order for the next round.
+- **The cursor**: `cursor()` is `selected` if in range, else `current`.
+  Every rebuild (`start`, `set_shuffle`, `reshuffle`, `restore`) clears
+  `selected`, so the cursor goes back to following the current track;
+  `follow_current` does the same after a jump.
+- **`remove_selected`** takes the track out of both orders (by index, and by
+  key in `unshuffled`), moving `current` down if the row was before it.
+  Removing the current track is refused (`RemoveError::Playing`), so
+  `current` always points at what's playing.
+- **`move_selected(delta, shuffle)`** swaps with the neighbour in `tracks`,
+  and in `unshuffled` too when shuffle is off (same order, same indices); with
+  shuffle on only the play order changes. `current` follows the current track
+  if it was one of the pair.
+- **`clear_upcoming`** truncates after the current track and keeps only the
+  remaining keys in `unshuffled`.
+- **`encode` / `restore`** turn both orders into `id` or `id:entry`
+  comma-separated strings and back (for "Resuming"); `restore` drops tracks
+  its `find` can't supply and reports where the saved current track ended up,
+  leaving `current` unset until `App` has loaded it.
+
+### Playing it (`app.rs`)
+
+`Queue` doesn't touch audio; `App` asks it what to play and tells it what's
+playing with `set_current`.
+
+- **`next`** plays `current + 1`; past the end, repeat-all reshuffles (if
   shuffling) and starts at 0, otherwise `play_index` runs off the end and
   stops. **`previous`** restarts the track after 3 s, else goes back one, and
   wraps to the end under repeat-all.
 - **Auto-advance** is `tick`: when `player.finished()`, repeat-one replays
-  `queue_index`, everything else calls `next`.
-- **`play_index(i)`** tries `queue[i]`, `i+1`, … until one decodes, then sets
-  `now_playing` (with the decoder's duration if the db has none) and
-  `queue_index`. If none decode, it stops.
+  the current index, everything else calls `next`.
+- **`play_index(i)`** tries track `i`, `i+1`, … until one decodes, then sets
+  `now_playing` (with the decoder's duration if the db has none) and the
+  queue's current index. If none decode, it stops (current becomes `None`;
+  the tracks stay).
 
 The queue is a snapshot: editing a playlist doesn't change what's queued.
 
 ### Editing the queue (`Pane::Queue`)
 
 The queue is the third focusable pane (`Tab` cycles sidebar → songs → queue,
-`h` is `focus_left`). Its cursor is `queue_selected: Option<usize>`, read
-through `queue_cursor()`: the chosen row if it's still in range, else
-`queue_index`. Everything that rebuilds the queue (Enter on a song, toggling
-shuffle, a repeat-all reshuffle, restoring a session) resets it to `None`, so
-the cursor goes back to following the current track. Jumping (`Enter`,
-double-click) calls `play_index(cursor)` and resets it too.
-
-Edits keep the shuffle invariant (`unshuffled` holds the same tracks as
-`queue`; with shuffle off, in the same order):
-
-- `queue_remove` takes the track out of `queue` by index and out of
-  `unshuffled` by `queue_key`, decrementing `queue_index` if the removed row
-  was before it. Removing the current track is refused, so `queue_index`
-  always points at what's playing.
-- `queue_move` swaps with the neighbour in `queue`, and in `unshuffled` too
-  when shuffle is off (same order, same indices); with shuffle on only the
-  play order changes, so shuffle-off still restores the list order.
-  `queue_index` follows the current track if it was one of the pair.
-- `queue_clear_upcoming` truncates `queue` after the current track and keeps
-  only the remaining keys in `unshuffled`.
+`h` is `focus_left`). Keys and clicks map onto the `Queue` operations above:
+`j`/`k` move the cursor, `Enter`/double-click jump (`play_index(cursor)` then
+`follow_current`), `d` removes, `J`/`K` move, `c` clears upcoming.
 
 The pane-dependent actions route on `focus`: `activate_selected`,
 `delete_selected`, `move_entry`, `start_add_to_playlist` (queue: the cursor's
@@ -383,7 +404,7 @@ divider, the one on its left.
 `App::save_session` writes, in one transaction: `session_location` (`all` or
 `playlist:<id>`), and, if a track is loaded, `session_index`,
 `session_position_ms`, and the queue in play and original order as
-`encode_keys` strings (`id` or `id:entry`, comma-separated). The queue can be
+`Queue::encode` strings (`id` or `id:entry`, comma-separated). The queue can be
 the whole library, so it's only rewritten when its encoding differs from
 `saved_queue`, the last one written; comparing every save is cheaper than
 tracking every place the queue changes. With nothing loaded (stopped), the
@@ -393,10 +414,10 @@ printed after the terminal is restored) and from `tick` every
 or a crash loses little.
 
 `restore_session`, at the end of `App::new` (before the first rescan), shows
-the saved source (All Tracks if the playlist is gone), rebuilds `queue` and
-`unshuffled` from `db::tracks_by_id` (every track, present or missing),
-dropping keys whose track is gone or missing and restoring entry ids, then
-finds the saved current track by key in the rebuilt queue. If it's there, it
+the saved source (All Tracks if the playlist is gone), rebuilds the queue
+with `Queue::restore` from `db::tracks_by_id` (every track, present or
+missing), dropping tracks that are gone or missing and restoring entry ids,
+and gets back where the saved current track is in it. If it's there, it
 is loaded with `Player::load_paused` at the saved position and selected in
 the songs list; if not, the queue is kept with nothing loaded.
 
@@ -605,8 +626,12 @@ Unit tests sit at the bottom of their module; there is no `tests/` directory.
   only after `SETTLE`.
 - *filter.rs* — word order, fuzzy abbreviations, accents, fzf operators,
   unranked order.
-- *app.rs* — `shuffled_from` (chosen first, same tracks once each),
-  `encode_keys`/`decode_keys` (round trip, malformed keys skipped), plus one
+- *queue.rs* — every queue rule without audio: `start` with and without
+  shuffle, `set_shuffle` keeping the current track, the cursor following the
+  current track until moved, removal (index bookkeeping, refusing the current
+  track), moves with shuffle off and on, clearing upcoming, key encoding, and
+  `restore` dropping lost tracks.
+- *app.rs* — one
   **ignored end-to-end test** that needs an audio device and `FOLDLY_TEST_DIR`
   (three tagged tones, see DEVELOPMENT.md). It drives `App` directly through
   scanning, sidebar previews and focus, filtering, the picker, bulk add,

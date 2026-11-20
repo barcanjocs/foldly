@@ -87,7 +87,7 @@ from its scope note alone, without re-deriving context.
       cleared on navigation; draw a marker column in the songs list.
 - [ ] **G. Gapless playback** (small-medium). Near the end of a track, append
       the next decoder to the same rodio `Player` instead of replacing the
-      player; advance `queue_index` when `Player::len()` drops. Interacts with
+      player; advance the queue's current index when `Player::len()` drops. Interacts with
       repeat-one and with `n`/`p` (which must clear the preloaded source).
 - [x] **H. Add the playing track to a playlist** — done 2026-11-20: `P`.
 - [x] **I. Watch the music folder** — done 2026-11-20: `watch.rs`, rescans
@@ -148,8 +148,10 @@ from its scope note alone, without re-deriving context.
 - **`draw` never touches the db** (it runs ~5×/sec). Everything it needs is a
   field on `App`; it may only update widget state (list offsets, help
   scroll clamping).
-- **Shuffle invariant:** `unshuffled` holds the queue in original order; any
-  change to the queue's contents must update both `queue` and `unshuffled`.
+- **Shuffle invariant:** the queue's `unshuffled` holds its tracks in the
+  original list order. Change the queue only through `Queue` methods
+  (queue.rs), which keep both orders in step; add a unit test there for any
+  new operation.
 - **Keys:** a new key needs an entry in `handle_normal_key` (main.rs), the
   `HELP` table and status hints (ui.rs), and README's key table.
 - **Tests:** temp paths use a `foldly-` prefix plus a per-test name and the
@@ -210,6 +212,8 @@ Requires Rust stable (edition 2024). Linux needs `libasound2-dev`.
 - `src/watch.rs` — music folder watcher (notify), event relevance rules,
   settle timer. Unit tests at the bottom.
 - `src/filter.rs` — fuzzy filter over nucleo. Unit tests at the bottom.
+- `src/queue.rs` — the play queue: both orders, current track, cursor, edits,
+  session encoding. Unit tests at the bottom.
 - `src/media.rs` — media keys and Now Playing (souvlaki): command channel,
   change-only publishing.
 - `src/player.rs` — audio output: one rodio `Player` per track.
