@@ -4,12 +4,43 @@ A terminal music player for Linux and macOS, built for one big music folder. fol
 folder into a small SQLite database and shows it as virtual folders: `All Tracks/`, plus one
 folder per playlist. Pressing Enter on a track plays it and queues the rest of that view.
 
+## Install
+
 ```sh
-cargo run --release -- ~/Music   # the folder is remembered; afterwards just run `foldly`
+curl -fsSL https://raw.githubusercontent.com/barcanjocs/foldly/main/install.sh | sh
+```
+
+This downloads the latest release for your machine (Linux or macOS, x86_64 or arm64), checks
+its SHA-256 checksum and installs `foldly` to `~/.local/bin`. Set `FOLDLY_INSTALL_DIR` to put it
+elsewhere, or `FOLDLY_VERSION=v0.1.0` for a specific release. Run the same command to update.
+Binaries are also on the [releases page](https://github.com/barcanjocs/foldly/releases).
+
+Then point it at your music once; the folder is remembered:
+
+```sh
+foldly ~/Music
+```
+
+On Linux, audio goes through ALSA (`libasound2`), which desktop distributions already include.
+
+### From source
+
+```sh
+cargo install --git https://github.com/barcanjocs/foldly
 ```
 
 Linux needs the ALSA headers to build: `sudo apt install libasound2-dev` (Debian/Ubuntu) or
 `sudo dnf install alsa-lib-devel` (Fedora).
+
+## Releasing
+
+Bump `version` in `Cargo.toml`, commit, then tag and push:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The release workflow builds and tests all four targets and publishes the release with checksums.
 
 The database lives in your data directory (`~/Library/Application Support/foldly/foldly.db` on
 macOS, `~/.local/share/foldly/foldly.db` on Linux). Set `FOLDLY_DB` to use a different one.
@@ -29,13 +60,14 @@ foldly never writes to your music files.
 | `+` / `-` | Volume |
 | `s` | Stop |
 | `z` | Shuffle on/off (remembered); the current track keeps playing |
+| `r` | Repeat: off → all → one (remembered) |
 | `a` | Add the selected track to a playlist |
 | `A` | Add every track shown (e.g. after filtering) to a playlist; tracks already in it are skipped |
 | `N` | New playlist |
 | `R` | Rename playlist |
 | `d` | Remove track from this playlist / delete the selected playlist |
 | `J` / `K` | Move a track down / up in a playlist |
-| `r` | Rescan the music folder |
+| `u` | Rescan (update) the music folder |
 | `?` | Help: every key, explained |
 | `q` | Quit |
 

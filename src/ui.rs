@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Gauge, List, ListItem, Paragraph};
 
-use crate::app::{App, Entry, InputPurpose, Location, Mode, location_name};
+use crate::app::{App, Entry, InputPurpose, Location, Mode, Repeat, location_name};
 
 const ACCENT: Color = Color::Cyan;
 
@@ -23,7 +23,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("g G  Home End", "Jump to the top / bottom"),
             ("Enter  l", "Open a folder, or play a track and queue the rest of the list"),
             ("Backspace  h", "Back to the top level"),
-            ("r", "Rescan the music folder"),
+            ("u", "Rescan (update) the music folder"),
         ],
     ),
     (
@@ -46,6 +46,7 @@ const HELP: &[(&str, &[(&str, &str)])] = &[
             ("← →", "Seek 5 seconds"),
             ("+ -", "Volume"),
             ("z", "Shuffle on / off (the current track keeps playing)"),
+            ("r", "Repeat: off → all (restart the queue) → one (loop this track)"),
             ("s", "Stop"),
         ],
     ),
@@ -157,7 +158,13 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
     };
     let total = duration.map_or_else(|| "--:--".to_string(), fmt_time);
     let shuffle = if app.shuffle { "   shuffle" } else { "" };
-    let label = format!("{icon} {} / {total}   vol {:.0}%{shuffle}", fmt_time(position), player.volume() * 100.0);
+    let repeat = match app.repeat {
+        Repeat::Off => "",
+        Repeat::All => "   repeat all",
+        Repeat::One => "   repeat one",
+    };
+    let label =
+        format!("{icon} {} / {total}   vol {:.0}%{shuffle}{repeat}", fmt_time(position), player.volume() * 100.0);
     let ratio = match duration {
         Some(d) if !d.is_zero() => (position.as_secs_f64() / d.as_secs_f64()).clamp(0.0, 1.0),
         _ => 0.0,
@@ -197,12 +204,12 @@ fn draw_status(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(format!(" filter: {}  (esc clears)", app.filter)).fg(ACCENT)
     } else {
         let help = match app.location {
-            Location::Root => " enter open · N new playlist · R rename · d delete · r rescan · ? help · q quit",
+            Location::Root => " enter open · N new playlist · R rename · d delete · u rescan · ? help · q quit",
             Location::AllTracks => {
-                " enter play · / filter · a add to playlist · A add all shown · space pause · n/p · z shuffle · ? help"
+                " enter play · / filter · a add to playlist · A add all · space pause · n/p · z shuffle · r repeat · ? help"
             }
             Location::Playlist { .. } => {
-                " enter play · / filter · a/A add · d remove · J/K move · space pause · z shuffle · ? help"
+                " enter play · / filter · a/A add · d remove · J/K move · space pause · z/r shuffle/repeat · ? help"
             }
         };
         Line::from(help).dark_gray()

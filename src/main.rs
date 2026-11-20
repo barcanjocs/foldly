@@ -20,7 +20,32 @@ use player::Player;
 
 const ROOT_SETTING: &str = "music_root";
 
+const USAGE: &str = "\
+foldly: a terminal music player for one music folder
+
+Usage:
+  foldly <MUSIC_FOLDER>   Scan and play this folder (remembered for next time)
+  foldly                  Use the folder from last time
+
+Options:
+  -h, --help       Show this message
+  -V, --version    Show the version
+
+Press ? inside foldly to see every key.";
+
 fn main() -> Result<()> {
+    match std::env::args().nth(1).as_deref() {
+        Some("-V" | "--version") => {
+            println!("foldly {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        Some("-h" | "--help") => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        _ => {}
+    }
+
     // FOLDLY_DB lets you keep a separate database, e.g. for testing.
     let db_path = match std::env::var_os("FOLDLY_DB") {
         Some(path) => PathBuf::from(path),
@@ -175,7 +200,8 @@ fn handle_normal_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('d') => app.delete_selected(),
         KeyCode::Char('K') => app.move_entry(-1),
         KeyCode::Char('J') => app.move_entry(1),
-        KeyCode::Char('r') => app.rescan(),
+        KeyCode::Char('r') => app.cycle_repeat(),
+        KeyCode::Char('u') => app.rescan(),
         _ => {}
     }
 }

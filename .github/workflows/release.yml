@@ -1,0 +1,86 @@
+# Builds foldly for Linux and macOS and publishes a GitHub release when a version tag is
+# pushed:  git tag v0.1.0 && git push origin v0.1.0
+#
+# Each release asset is foldly-<target>.tar.gz plus a .sha256 file, which install.sh uses.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 22.04 keeps the glibc requirement low, so the Linux builds run on older distros.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: aarch64-apple-darwin, os: macos-14 }
+          # Intel Macs: cross-compiled on Apple silicon (tests can't run there).
+          - { target: x86_64-apple-darwin, os: macos-14, cross: true }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install ALSA headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+
+      - name: Check the tag matches Cargo.toml
+        shell: bash
+        run: |
+          version="v$(grep -m1 '^version' Cargo.toml | cut -d '"' -f 2)"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version" >&2
+            exit 1
+          fi
+
+      - name: Test
+        if: ${{ !matrix.cross }}
+        run: cargo test --locked --release --target ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Package
+        shell: bash
+        run: |
+          asset="foldly-${{ matrix.target }}.tar.gz"
+          tar -czf "$asset" -C "target/${{ matrix.target }}/release" foldly
+          shasum -a 256 "$asset" > "$asset.sha256"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: foldly-${{ matrix.target }}
+          path: foldly-*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "foldly $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

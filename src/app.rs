@@ -31,6 +31,41 @@ pub enum Entry {
     Track(Track),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Repeat {
+    Off,
+    /// Start the queue again after the last track.
+    All,
+    /// Replay the current track when it ends (n / p still move on).
+    One,
+}
+
+impl Repeat {
+    fn cycle(self) -> Self {
+        match self {
+            Repeat::Off => Repeat::All,
+            Repeat::All => Repeat::One,
+            Repeat::One => Repeat::Off,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Repeat::Off => "off",
+            Repeat::All => "all",
+            Repeat::One => "one",
+        }
+    }
+
+    fn parse(s: &str) -> Self {
+        match s {
+            "all" => Repeat::All,
+            "one" => Repeat::One,
+            _ => Repeat::Off,
+        }
+    }
+}
+
 pub enum InputPurpose {
     /// Create a playlist, optionally adding a track to it straight away.
     NewPlaylist {
@@ -87,6 +122,7 @@ pub struct App {
     /// The queue in its original order, restored when shuffle is turned off.
     unshuffled: Vec<Track>,
     pub shuffle: bool,
+    pub repeat: Repeat,
     pub now_playing: Option<Track>,
     pub player: Player,
 
@@ -114,6 +150,7 @@ impl App {
             queue: Vec::new(),
             unshuffled: Vec::new(),
             shuffle: false,
+            repeat: Repeat::Off,
             queue_index: None,
             now_playing: None,
             player,
@@ -123,6 +160,7 @@ impl App {
             should_quit: false,
         };
         app.shuffle = db::get_setting(&app.conn, SHUFFLE_SETTING)?.as_deref() == Some("1");
+        app.repeat = Repeat::parse(db::get_setting(&app.conn, REPEAT_SETTING)?.as_deref().unwrap_or_default());
         app.reload()?;
         app.rescan();
         Ok(app)
@@ -479,20 +517,39 @@ impl App {
         self.stop();
     }
 
+    /// Skips to the next track. Past the end of the queue, repeat-all starts it again
+    /// (reshuffled when shuffle is on); otherwise playback stops.
     pub fn next(&mut self) {
-        if let Some(i) = self.queue_index {
+        let Some(i) = self.queue_index else { return };
+        if i + 1 < self.queue.len() || self.repeat != Repeat::All {
             self.play_index(i + 1);
+        } else {
+            if self.shuffle {
+                self.queue = shuffled_from(&self.unshuffled, fastrand::usize(..self.unshuffled.len()));
+            }
+            self.play_index(0);
         }
     }
 
     pub fn previous(&mut self) {
         let Some(i) = self.queue_index else { return };
         // Like most players: restart the track unless we're near its start.
-        if self.player.position() > Duration::from_secs(3) || i == 0 {
+        if self.player.position() > Duration::from_secs(3) {
             self.play_index(i);
-        } else {
+        } else if i > 0 {
             self.play_index(i - 1);
+        } else if self.repeat == Repeat::All {
+            self.play_index(self.queue.len() - 1);
+        } else {
+            self.play_index(0);
         }
+    }
+
+    /// Cycles repeat: off → all → one → off.
+    pub fn cycle_repeat(&mut self) {
+        self.repeat = self.repeat.cycle();
+        let result = db::set_setting(&self.conn, REPEAT_SETTING, self.repeat.as_str());
+        self.report(result);
     }
 
     /// Turns shuffle on or off. The current track keeps playing either way: turning it on
@@ -523,7 +580,10 @@ impl App {
     /// Called every loop iteration: advances when a track ends and picks up scan progress.
     pub fn tick(&mut self) {
         if self.player.finished() {
-            self.next();
+            match (self.repeat, self.queue_index) {
+                (Repeat::One, Some(i)) => self.play_index(i),
+                _ => self.next(),
+            }
         }
         self.poll_scan();
     }
@@ -570,6 +630,7 @@ impl App {
 }
 
 const SHUFFLE_SETTING: &str = "shuffle";
+const REPEAT_SETTING: &str = "repeat";
 
 /// Identifies a queue item; the entry id tells apart repeats of a track within a playlist.
 fn queue_key(t: &Track) -> (i64, Option<i64>) {
@@ -730,6 +791,45 @@ mod tests {
         app.toggle_shuffle();
         assert_eq!(app.queue.iter().map(|t| t.title.clone()).collect::<Vec<_>>(), ordered);
         assert_eq!(app.queue[app.queue_index.unwrap()].title.as_deref(), Some("Tone 3"));
+
+        // Repeat one: when Tone 3 ends it plays again.
+        app.cycle_repeat();
+        app.cycle_repeat();
+        assert_eq!(app.repeat, Repeat::One);
+        let index = app.queue_index;
+        app.player.seek_by(2);
+        std::thread::sleep(Duration::from_millis(100));
+        let mut replayed = false;
+        for _ in 0..30 {
+            let before = app.player.position();
+            app.tick();
+            if app.player.position() < before {
+                replayed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(replayed, "track should restart");
+        assert_eq!(app.queue_index, index);
+
+        // Repeat all: next past the last track wraps to the first, previous wraps back.
+        app.cycle_repeat();
+        app.cycle_repeat();
+        assert_eq!(app.repeat, Repeat::All);
+        let last = app.queue.len() - 1;
+        app.play_index(last);
+        app.next();
+        assert_eq!(app.queue_index, Some(0));
+        app.previous();
+        assert_eq!(app.queue_index, Some(last));
+
+        // Repeat off: next past the end stops.
+        app.cycle_repeat();
+        app.cycle_repeat();
+        assert_eq!(app.repeat, Repeat::Off);
+        app.next();
+        assert_eq!(app.queue_index, None);
+        app.play_index(1);
 
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
         terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();

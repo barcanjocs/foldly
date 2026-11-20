@@ -18,11 +18,14 @@
 - [x] Queue panel on the right (recent history, current, up next); current song shown above
       the progress bar
 - [x] `?` help popup listing every key (scrolls on short terminals)
+- [x] Repeat (`r`): off / all (restarts the queue, reshuffled if shuffle is on) / one;
+      remembered between runs. Rescan moved to `u`
 - [x] Music folder remembered between runs
+- [x] One-line install (`install.sh`) from GitHub releases built by CI for Linux and macOS,
+      x86_64 and arm64; `--version` / `--help`
 
 ## Next
 
-- [ ] Repeat modes (off / all / one)
 - [ ] Remember the last view, track and position between runs
 - [ ] Media keys and OS Now Playing via `souvlaki` (MPRIS on Linux, Now Playing on macOS)
 - [ ] Gapless playback (append the next track to the rodio player before the current one ends)
@@ -51,4 +54,4 @@
 - [ ] Make the queue panel interactive: focus it (Tab), jump to a track, remove, reorder, clear
 - [ ] Config file: keybindings, colours, seek step, start view
 - [ ] Silence ALSA's stderr warnings on Linux if they garble the screen
-- [ ] Build and test on Linux (needs `libasound2-dev` / `alsa-lib-devel`)
+- [ ] Try foldly on a real Linux desktop (CI builds and runs the tests, but not audio)
