@@ -47,7 +47,9 @@ truth for state — this file plus `git log` is all that is needed to resume.
   a remembered volume starting at 100%. v0.5.1 is a tidy-up: the queue's
   rules in queue.rs (unit-tested), focused end-to-end tests on a shared
   harness, one key table (keys.rs) driving dispatch and help, and a
-  two-column help popup that fits 120×40.
+  two-column help popup that fits 120×40. v0.6.0 moves between panes with
+  Ctrl-H / Ctrl-L, like Neovim windows (bare h and l no longer do), and
+  redraw moves to Ctrl-R.
 - Decision (2026-11-20): foldly's volume stays separate from the system
   volume. macOS volume keys never reach apps, and the user prefers an
   app-level volume since macOS has no per-app mixer; don't try to link them.
