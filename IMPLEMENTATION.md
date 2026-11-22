@@ -46,7 +46,7 @@ the column rects in `App::panes` for the mouse).
   then runs the loop. `handle_key` routes by `Mode`; in normal mode keys go
   through `keys::action_for` to `perform`, an exhaustive `match` on `Action`.
 - **`keys.rs`** — the key table. `BINDINGS` maps each `Action` to its keys
-  (Ctrl keys work in every mode, the rest in normal mode); `HELP` lists the
+  (quit and redraw work in every mode, the rest in normal mode); `HELP` lists the
   help popup's sections as rows of actions (or notes, for examples and the
   mouse), labelled from `BINDINGS` by `label`. An action can appear in
   several sections with wording for that pane. Three things keep it honest:
@@ -397,7 +397,8 @@ The queue is a snapshot: editing a playlist doesn't change what's queued.
 ### Editing the queue (`Pane::Queue`)
 
 The queue is the third focusable pane (`Tab` cycles sidebar → songs → queue,
-`h` is `focus_left`). Keys and clicks map onto the `Queue` operations above:
+`Ctrl-H`/`Ctrl-L` are `focus_left`/`focus_right`). Keys and clicks map onto
+the `Queue` operations above:
 `j`/`k` move the cursor, `Enter`/double-click jump (`play_index(cursor)` then
 `follow_current`), `d` removes, `J`/`K` move, `c` clears upcoming.
 
@@ -506,7 +507,7 @@ instead, and `App::tick` calls `Player::handle_errors`:
 
 A handled error returns a message and sets `App::needs_full_redraw`, which
 makes the main loop `terminal.clear()` before drawing, wiping anything another
-library may have printed. `Ctrl-L` sets the same flag.
+library may have printed. `Ctrl-R` sets the same flag.
 
 ## Rendering (`ui.rs`)
 

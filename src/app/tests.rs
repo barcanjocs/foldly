@@ -679,9 +679,11 @@ fn key_presses_go_through_the_key_table() {
     let mut h = Harness::with_mix("keys");
     let press = |h: &mut Harness, code: KeyCode| crate::handle_key(h, KeyEvent::new(code, KeyModifiers::NONE));
     let typed = |h: &mut Harness, text: &str| text.chars().for_each(|c| press(h, KeyCode::Char(c)));
+    let ctrl = |h: &mut Harness, c: char| crate::handle_key(h, KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL));
 
     // Filter, Enter plays the top match; Space pauses; Tab cycles focus; ? opens help, which any
-    // other key closes; Esc clears a filter; Ctrl-L asks for a redraw; q quits.
+    // other key closes; Esc clears a filter; Ctrl-H / Ctrl-L move between panes (h and l alone
+    // don't); Ctrl-R asks for a redraw; q quits.
     press(&mut h, KeyCode::Char('/'));
     typed(&mut h, "tone 2");
     press(&mut h, KeyCode::Enter);
@@ -691,6 +693,15 @@ fn key_presses_go_through_the_key_table() {
     press(&mut h, KeyCode::Tab);
     assert_eq!(h.focus, Pane::Queue);
     press(&mut h, KeyCode::Char('h'));
+    assert_eq!(h.focus, Pane::Queue);
+    ctrl(&mut h, 'h');
+    assert_eq!(h.focus, Pane::Songs);
+    ctrl(&mut h, 'h');
+    ctrl(&mut h, 'h');
+    assert_eq!(h.focus, Pane::Sidebar);
+    press(&mut h, KeyCode::Char('l'));
+    assert_eq!(h.focus, Pane::Sidebar);
+    ctrl(&mut h, 'l');
     assert_eq!(h.focus, Pane::Songs);
     press(&mut h, KeyCode::Char('?'));
     assert!(matches!(h.mode, Mode::Help { .. }));
@@ -700,7 +711,7 @@ fn key_presses_go_through_the_key_table() {
     assert!(h.filter.is_empty());
     press(&mut h, KeyCode::Char('+'));
     assert_eq!(h.player.volume(), 1.05);
-    crate::handle_key(&mut h, KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL));
+    ctrl(&mut h, 'r');
     assert!(h.needs_full_redraw);
     press(&mut h, KeyCode::Char('q'));
     assert!(h.should_quit);

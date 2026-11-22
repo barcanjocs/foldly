@@ -58,8 +58,8 @@ usual. Inside foldly, press `?` for every key.
 |-----|--------|
 | `↑`/`↓`, `j`/`k` | Move the selection in the focused pane (`PgUp`/`PgDn` by 10, `g`/`G` to top/bottom) |
 | `Tab` | Focus the next pane: sidebar → songs → queue |
-| `Enter`/`l` | Sidebar: go to its songs. Songs: play the track and queue the rest of the list |
-| `h` | Focus the pane to the left |
+| `Enter` | Sidebar: go to its songs. Songs: play the track and queue the rest of the list |
+| `Ctrl-H` / `Ctrl-L` | Focus the pane to the left / right |
 | `Backspace` | Back to the sidebar |
 | `<` / `>` | Move the divider to the right of the focused pane (or drag dividers with the mouse) |
 | `/` | Fuzzy filter the songs list; `Enter` plays the top match, `Esc` clears |
@@ -79,14 +79,14 @@ usual. Inside foldly, press `?` for every key.
 | `J` / `K` | Move a track down / up in a playlist |
 | `u` | Rescan now (changes are picked up automatically) |
 | `?` | Help: every key, explained (two columns on wide terminals) |
-| `Ctrl-L` | Redraw the screen |
+| `Ctrl-R` | Redraw the screen |
 | `q` | Quit |
 
 ### Sidebar and songs
 
 The sidebar lists `All Tracks` and every playlist, each with its track count. Whatever is
 selected in the sidebar is shown in the songs list, so moving through the sidebar previews each
-playlist as you go. Focus starts in the songs list; `Tab`, `h`/`l`, `Enter` or a mouse click
+playlist as you go. Focus starts in the songs list; `Tab`, `Ctrl-H`/`Ctrl-L`, `Enter` or a mouse click
 move it. The focused pane is the one with the heavy, coloured border (every other border is
 dimmed), and an empty songs list says why it's empty and how to fill it.
 
@@ -178,7 +178,7 @@ info pane shows whichever song it's on:
 
 | Key | Action |
 |-----|--------|
-| `Enter`/`l`, double-click | Jump to the selected song |
+| `Enter`, double-click | Jump to the selected song |
 | `d` | Remove it from the queue (the song playing can't be removed; `n` skips it) |
 | `J` / `K` | Play it later / earlier |
 | `c` | Clear everything after the current song |
@@ -243,7 +243,7 @@ foldly tells the system what's playing and listens to its playback controls:
 Switching the system's output (to headphones, or a different speaker) is followed automatically.
 If the output device disappears, e.g. it's unplugged, foldly reconnects to the new default and
 carries on from the same spot, saying so on the bottom line. If the screen ever looks garbled,
-`Ctrl-L` redraws it.
+`Ctrl-R` redraws it.
 
 ## Data
 

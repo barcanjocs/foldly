@@ -441,11 +441,19 @@ impl App {
         };
     }
 
-    /// `h`: one pane to the left.
+    /// `Ctrl-H`: one pane to the left.
     pub fn focus_left(&mut self) {
         self.focus = match self.focus {
             Pane::Queue => Pane::Songs,
             Pane::Songs | Pane::Sidebar => Pane::Sidebar,
+        };
+    }
+
+    /// `Ctrl-L`: one pane to the right.
+    pub fn focus_right(&mut self) {
+        self.focus = match self.focus {
+            Pane::Sidebar => Pane::Songs,
+            Pane::Songs | Pane::Queue => Pane::Queue,
         };
     }
 

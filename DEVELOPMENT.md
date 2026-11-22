@@ -26,7 +26,7 @@ truth for state — this file plus `git log` is all that is needed to resume.
   columns (sidebar of sources | songs | info over queue) with focus
   switching, resizable by `<`/`>` or mouse drag and saved in `settings`.
   Playlist editing (add, add all shown, remove, reorder, rename, delete),
-  fuzzy filter (nucleo), shuffle, repeat, `?` help, `Ctrl-L` redraw. The info
+  fuzzy filter (nucleo), shuffle, repeat, `?` help, `Ctrl-R` redraw. The info
   pane shows the selected song (tags incl. year/genre, format and quality,
   file, "also in") or summarises the selected source. Audio stream errors are
   captured; a lost output device is reopened with the track resumed. Schema
@@ -103,7 +103,7 @@ from its scope note alone, without re-deriving context.
 - [ ] **K. Linux desktop check** (small). CI builds and runs the tests on
       Linux, but no one has played audio there. Try it under PipeWire and
       plain ALSA, including unplugging the output device. rodio's errors are
-      captured, but ALSA's C library can still print to stderr; `Ctrl-L`
+      captured, but ALSA's C library can still print to stderr; `Ctrl-R`
       repairs the screen. If it happens often, redirect stderr (fd 2) to a
       log file while the TUI is up.
 - [x] **L. Track durations in lists** — done 2026-11-20: right-aligned in

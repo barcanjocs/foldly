@@ -23,6 +23,7 @@ pub enum Action {
     Activate,
     NextPane,
     PaneLeft,
+    PaneRight,
     ToSidebar,
     DividerLeft,
     DividerRight,
@@ -70,10 +71,10 @@ const fn ctrl(c: char) -> Key {
 
 use Action as A;
 
-/// Which keys do what. Ctrl keys work in every mode; the others in normal mode.
+/// Which keys do what. Quit and redraw work in every mode; the others in normal mode.
 pub const BINDINGS: &[(Action, &[Key])] = &[
     (A::Quit, &[ch('q'), ctrl('c')]),
-    (A::Redraw, &[ctrl('l')]),
+    (A::Redraw, &[ctrl('r')]),
     (A::Help, &[ch('?')]),
     (A::Up, &[key(KeyCode::Up), ch('k')]),
     (A::Down, &[key(KeyCode::Down), ch('j')]),
@@ -81,9 +82,10 @@ pub const BINDINGS: &[(Action, &[Key])] = &[
     (A::PageDown, &[key(KeyCode::PageDown)]),
     (A::First, &[key(KeyCode::Home), ch('g')]),
     (A::Last, &[key(KeyCode::End), ch('G')]),
-    (A::Activate, &[key(KeyCode::Enter), ch('l')]),
+    (A::Activate, &[key(KeyCode::Enter)]),
     (A::NextPane, &[key(KeyCode::Tab)]),
-    (A::PaneLeft, &[ch('h')]),
+    (A::PaneLeft, &[ctrl('h')]),
+    (A::PaneRight, &[ctrl('l')]),
     (A::ToSidebar, &[key(KeyCode::Backspace)]),
     (A::DividerLeft, &[ch('<')]),
     (A::DividerRight, &[ch('>')]),
@@ -141,7 +143,7 @@ pub const HELP: &[Section] = &[
             Keys(&[A::First, A::Last], "Jump to the top / bottom"),
             Keys(&[A::NextPane], "Next pane: sidebar → songs → queue"),
             Keys(&[A::Activate], "Sidebar: open. Songs: play from here"),
-            Keys(&[A::PaneLeft], "Focus the pane to the left"),
+            Keys(&[A::PaneLeft, A::PaneRight], "Focus the pane to the left / right"),
             Keys(&[A::ToSidebar], "Back to the sidebar"),
             Keys(&[A::DividerLeft, A::DividerRight], "Move the focused pane's right divider"),
             Keys(&[A::Rescan], "Rescan (changes are picked up anyway)"),

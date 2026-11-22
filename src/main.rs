@@ -155,10 +155,13 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) {
-    // Ctrl keys (quit, redraw) work everywhere, even in prompts and popups.
+    // Quit and redraw work everywhere, even in prompts and popups; other Ctrl keys only in
+    // normal mode.
     if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if let Some(action) = keys::action_for(key.code, key.modifiers) {
-            perform(app, action);
+        match keys::action_for(key.code, key.modifiers) {
+            Some(action @ (Action::Quit | Action::Redraw)) => perform(app, action),
+            Some(action) if matches!(app.mode, Mode::Normal) => perform(app, action),
+            _ => {}
         }
         return;
     }
@@ -261,6 +264,7 @@ fn perform(app: &mut App, action: Action) {
         Action::Activate => app.activate_selected(),
         Action::NextPane => app.toggle_focus(),
         Action::PaneLeft => app.focus_left(),
+        Action::PaneRight => app.focus_right(),
         Action::ToSidebar => app.focus_pane(Pane::Sidebar),
         Action::DividerLeft => app.resize_focused(-2),
         Action::DividerRight => app.resize_focused(2),
